@@ -53,31 +53,51 @@ function LandingPage() {
             Native support for private Facebook videos and multi-threaded processing.
           </p>
 
-          {/* Core App Interaction */}
-          <div className="mx-auto mt-12 max-w-xl w-full">
-            <div className="relative group transition-all duration-500">
-              <div className="absolute -inset-1 bg-gradient-to-r from-primary to-blue-600 rounded-2xl blur opacity-25 group-focus-within:opacity-50 transition duration-1000" />
-              <div className="relative flex p-1.5 bg-card border rounded-2xl shadow-2xl">
-                <Input 
-                  placeholder="Paste your video URL here..." 
-                  className="flex-1 border-none shadow-none bg-transparent h-14 text-base focus-visible:ring-0 px-6"
-                />
-                <Button size="lg" className="h-14 px-8 rounded-xl font-bold gap-2">
-                  <HiDownload className="h-5 w-5" /> Download
-                </Button>
+          {/* Custom Core App Interaction */}
+          <div className="mx-auto mt-12 max-w-2xl w-full px-4">
+            <div className="group relative transition-all duration-500">
+              {/* Subtle Ambient Glow */}
+              <div className="absolute -inset-0.5 bg-gradient-to-r from-primary/30 to-blue-600/30 rounded-2xl blur opacity-0 group-focus-within:opacity-100 transition duration-1000" />
+              
+              <div className="relative flex flex-col md:flex-row gap-2 b-2 border border-primary/10 bg-card/80 backdrop-blur-sm p-2 rounded-2xl shadow-2xl shadow-primary/5 group-focus-within:border-primary/30 group-focus-within:shadow-primary/10 transition-all duration-500">
+                <div className="relative flex-1 flex items-center">
+                  <div className="absolute left-4 text-muted-foreground/40 group-focus-within:text-primary/40 transition-colors">
+                    <BiGlobe className="h-5 w-5" />
+                  </div>
+                  <input 
+                    type="url"
+                    placeholder="Paste your video URL here..." 
+                    className="w-full bg-transparent h-14 pl-12 pr-4 text-base font-medium outline-none placeholder:text-muted-foreground/30 text-foreground"
+                  />
+                </div>
+                
+                <button className="h-14 px-8 bg-primary rounded-xl text-primary-foreground font-bold flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-[0.98] transition-all shadow-lg shadow-primary/20">
+                  <HiDownload className="h-5 w-5" />
+                  <span>Download Now</span>
+                </button>
               </div>
             </div>
-            <div className="mt-4 flex flex-wrap justify-center gap-4 text-xs font-medium text-muted-foreground uppercase tracking-widest">
-              <span className="flex items-center gap-1.5"><CheckCircleIcon /> MP4 Export</span>
-              <span className="flex items-center gap-1.5"><CheckCircleIcon /> AES-128 Ready</span>
-              <span className="flex items-center gap-1.5"><CheckCircleIcon /> No Watermark</span>
+            
+            <div className="mt-6 flex flex-wrap justify-center gap-6 text-[10px] font-bold text-muted-foreground/40 uppercase tracking-[0.2em]">
+              <span className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-primary" />
+                No Account Required
+              </span>
+              <span className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-primary" />
+                4K Quality Supported
+              </span>
+              <span className="flex items-center gap-2">
+                <div className="h-1 w-1 rounded-full bg-primary" />
+                High-Speed Servers
+              </span>
             </div>
           </div>
         </div>
       </section>
 
       {/* Platform Support Section */}
-      <section id="platforms" className="py-12 border-y bg-muted/20">
+      <section id="platforms" className="py-16 border-y border-primary/5 bg-muted/10 blur-sm hover:blur-none transition-all duration-700">
         <div className="container mx-auto px-6">
             <div className="flex flex-wrap justify-center items-center gap-8 md:gap-16 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
                 <div className="flex items-center gap-2">
