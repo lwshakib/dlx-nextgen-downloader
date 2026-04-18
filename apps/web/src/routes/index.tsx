@@ -5,10 +5,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/componen
 import { Badge } from "@workspace/ui/components/badge"
 import { Input } from "@workspace/ui/components/input"
 import { Logo } from "@workspace/ui/components/logo"
-import { HiDownload, HiShieldCheck, HiOutlineLightningBolt, HiOutlineChevronRight, HiSun, HiMoon } from "react-icons/hi"
+import { HiDownload, HiShieldCheck, HiOutlineLightningBolt, HiOutlineChevronRight, HiSun, HiMoon, HiMenu } from "react-icons/hi"
 import { FaYoutube, FaFacebook, FaTiktok, FaGithub, FaDiscord, FaSquareXTwitter } from "react-icons/fa6"
 import { BiGlobe } from "react-icons/bi"
 import { useTheme } from "@workspace/ui/components/theme-provider"
+import { cn } from "@workspace/ui/lib/utils"
+import { 
+    Sheet, 
+    SheetContent, 
+    SheetHeader, 
+    SheetTitle, 
+    SheetTrigger,
+    SheetClose
+} from "@workspace/ui/components/sheet"
 
 export const Route = createFileRoute("/")({ component: LandingPage })
 
@@ -25,13 +34,15 @@ function LandingPage() {
                 <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Next Gen</span>
             </div>
           </div>
+          
+          {/* Desktop Nav */}
           <div className="hidden md:flex items-center gap-10">
-            <a href="#features" className="text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Features</a>
-            <a href="#platforms" className="text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Platforms</a>
-            <a href="#resources" className="text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Docs</a>
+            <NavLinks />
           </div>
-          <div className="flex items-center gap-4">
+
+          <div className="flex items-center gap-2 md:gap-4">
             <ModeToggle />
+            <MobileNav />
           </div>
         </div>
       </nav>
@@ -97,7 +108,7 @@ function LandingPage() {
       </section>
 
       {/* Platform Support Section */}
-      <section id="platforms" className="py-16 border-y border-primary/5 bg-muted/10 blur-sm hover:blur-none transition-all duration-700">
+      <section id="platforms" className="scroll-mt-32 py-16 border-y border-primary/5 bg-muted/10 blur-sm hover:blur-none transition-all duration-700">
         <div className="container mx-auto px-6">
             <div className="flex flex-wrap justify-center items-center gap-8 md:gap-16 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
                 <div className="flex items-center gap-2">
@@ -117,7 +128,7 @@ function LandingPage() {
       </section>
 
       {/* Minimal Feature Highlights */}
-      <section id="features" className="py-24">
+      <section id="features" className="scroll-mt-32 py-24">
         <div className="container mx-auto px-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
             <FeatureItem 
@@ -140,7 +151,7 @@ function LandingPage() {
       </section>
 
       {/* Detailed Footer */}
-      <footer id="resources" className="mt-auto border-t py-16 bg-card/30">
+      <footer id="resources" className="scroll-mt-32 mt-auto border-t py-16 bg-card/30">
         <div className="container mx-auto px-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
                 {/* Brand & Description */}
@@ -213,6 +224,51 @@ function LandingPage() {
       </footer>
     </div>
   )
+}
+
+function NavLinks({ className, itemClassName }: { className?: string, itemClassName?: string }) {
+    return (
+        <div className={cn("flex items-center gap-10", className)}>
+            <a href="#features" className={cn("text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all", itemClassName)}>Features</a>
+            <a href="#platforms" className={cn("text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all", itemClassName)}>Platforms</a>
+            <a href="#resources" className={cn("text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all", itemClassName)}>Docs</a>
+        </div>
+    )
+}
+
+function MobileNav() {
+    return (
+        <Sheet>
+            <SheetTrigger asChild>
+                <Button variant="ghost" size="icon" className="md:hidden rounded-full">
+                    <HiMenu className="h-6 w-6 text-primary" />
+                    <span className="sr-only">Open Menu</span>
+                </Button>
+            </SheetTrigger>
+            <SheetContent side="right" className="w-[300px] sm:w-[400px] border-l-primary/10">
+                <SheetHeader className="mb-8">
+                    <SheetTitle className="flex items-center gap-3">
+                        <Logo size={28} className="text-primary" />
+                        <div className="flex items-baseline gap-2">
+                            <span className="text-xl font-black tracking-tighter">DLX</span>
+                            <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Next Gen</span>
+                        </div>
+                    </SheetTitle>
+                </SheetHeader>
+                <div className="flex flex-col gap-6 px-4">
+                    <SheetClose asChild>
+                        <a href="#features" className="text-lg font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Features</a>
+                    </SheetClose>
+                    <SheetClose asChild>
+                        <a href="#platforms" className="text-lg font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Platforms</a>
+                    </SheetClose>
+                    <SheetClose asChild>
+                        <a href="#resources" className="text-lg font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Docs</a>
+                    </SheetClose>
+                </div>
+            </SheetContent>
+        </Sheet>
+    )
 }
 
 function ModeToggle() {
