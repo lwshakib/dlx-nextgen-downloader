@@ -5,28 +5,33 @@ import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/componen
 import { Badge } from "@workspace/ui/components/badge"
 import { Input } from "@workspace/ui/components/input"
 import { Logo } from "@workspace/ui/components/logo"
-import { HiDownload, HiShieldCheck, HiOutlineLightningBolt, HiOutlineChevronRight } from "react-icons/hi"
-import { FaYoutube, FaFacebook, FaTiktok } from "react-icons/fa"
+import { HiDownload, HiShieldCheck, HiOutlineLightningBolt, HiOutlineChevronRight, HiSun, HiMoon } from "react-icons/hi"
+import { FaYoutube, FaFacebook, FaTiktok, FaGithub, FaDiscord, FaSquareXTwitter } from "react-icons/fa6"
 import { BiGlobe } from "react-icons/bi"
+import { useTheme } from "@workspace/ui/components/theme-provider"
 
 export const Route = createFileRoute("/")({ component: LandingPage })
 
 function LandingPage() {
   return (
-    <div className="flex min-h-screen flex-col bg-background text-foreground font-sans selection:bg-primary/20">
-      {/* Minimal Header */}
-      <nav className="sticky top-0 z-50 w-full bg-background/50 backdrop-blur-xl transition-all duration-300">
-        <div className="container mx-auto flex h-16 items-center justify-between px-6">
-          <div className="flex items-center gap-2.5">
-            <Logo size={28} className="text-primary" />
-            <span className="text-lg font-bold tracking-tight">DLX <span className="text-muted-foreground font-medium">Downloader</span></span>
+    <div className="flex min-h-screen flex-col bg-background text-foreground font-sans selection:bg-primary/20 scroll-smooth">
+      {/* Detailed Header */}
+      <nav className="sticky top-0 z-50 w-full bg-background/50 backdrop-blur-xl border-b transition-all duration-300">
+        <div className="container mx-auto flex h-20 items-center justify-between px-6">
+          <div className="flex items-center gap-3">
+            <Logo size={36} className="text-primary" />
+            <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-black tracking-tighter text-foreground">DLX</span>
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Next Gen</span>
+            </div>
+          </div>
+          <div className="hidden md:flex items-center gap-10">
+            <a href="#features" className="text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Features</a>
+            <a href="#platforms" className="text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Platforms</a>
+            <a href="#resources" className="text-sm font-bold opacity-60 hover:opacity-100 hover:text-primary transition-all">Docs</a>
           </div>
           <div className="flex items-center gap-4">
-             <Badge variant="outline" className="hidden sm:flex text-[10px] uppercase font-bold text-muted-foreground border-muted-foreground/20">
-                Hotkey <kbd className="ml-1 px-1 font-mono text-primary">D</kbd>
-            </Badge>
-            <Button variant="ghost" size="sm" className="rounded-full">Docs</Button>
-            <Button size="sm" className="rounded-full px-4 font-semibold shadow-lg shadow-primary/20">Sign Up</Button>
+            <ModeToggle />
           </div>
         </div>
       </nav>
@@ -34,7 +39,7 @@ function LandingPage() {
       {/* Hero Section - The Core Utility */}
       <section className="flex flex-1 flex-col items-center justify-center py-20 px-6 text-center lg:py-32">
         <div className="container mx-auto max-w-4xl space-y-8">
-          <Badge className="bg-primary/10 text-primary border-primary/20 px-4 py-1.5 rounded-full font-semibold animate-in fade-in slide-in-from-bottom-3 duration-1000">
+          <Badge className="bg-primary/10 text-primary border-primary/20 px-4 py-1.5 rounded-full font-semibold">
             Speed. Simplicity. Security.
           </Badge>
           
@@ -72,7 +77,7 @@ function LandingPage() {
       </section>
 
       {/* Platform Support Section */}
-      <section className="py-12 border-y bg-muted/20">
+      <section id="platforms" className="py-12 border-y bg-muted/20">
         <div className="container mx-auto px-6">
             <div className="flex flex-wrap justify-center items-center gap-8 md:gap-16 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
                 <div className="flex items-center gap-2">
@@ -92,7 +97,7 @@ function LandingPage() {
       </section>
 
       {/* Minimal Feature Highlights */}
-      <section className="py-24">
+      <section id="features" className="py-24">
         <div className="container mx-auto px-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
             <FeatureItem 
@@ -114,25 +119,113 @@ function LandingPage() {
         </div>
       </section>
 
-      {/* Minimal Footer */}
-      <footer className="mt-auto border-t py-12">
-        <div className="container mx-auto flex flex-col items-center justify-between gap-6 px-6 md:flex-row">
-            <div className="flex items-center gap-2.5">
-                <Logo size={24} className="text-muted-foreground" />
-                <span className="text-sm font-bold tracking-tight opacity-50">DLX UNIVERSAL</span>
+      {/* Detailed Footer */}
+      <footer id="resources" className="mt-auto border-t py-16 bg-card/30">
+        <div className="container mx-auto px-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
+                {/* Brand & Description */}
+                <div className="space-y-6">
+                    <div className="flex items-center gap-3">
+                        <Logo size={32} className="text-primary" />
+                        <div className="flex items-baseline gap-2">
+                        <span className="text-xl font-black tracking-tighter">DLX</span>
+                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Next Gen</span>
+                    </div>
+                    </div>
+                    <p className="text-sm text-muted-foreground/80 leading-relaxed max-w-xs">
+                        The ultimate media extraction toolkit for the modern web. 
+                        Safe, fast, and private video downloads across all major platforms.
+                    </p>
+                    <div className="flex gap-4">
+                        <SocialLink href="#" icon={<FaSquareXTwitter />} />
+                        <SocialLink href="#" icon={<FaDiscord />} />
+                        <SocialLink href="#" icon={<FaGithub />} />
+                        <SocialLink href="#" icon={<FaFacebook />} />
+                        <SocialLink href="#" icon={<FaYoutube />} />
+                        <SocialLink href="#" icon={<FaTiktok />} />
+                    </div>
+                </div>
+
+                {/* Navigation Columns */}
+                <div>
+                    <h4 className="font-bold text-sm mb-6 uppercase tracking-widest text-primary">Product</h4>
+                    <ul className="space-y-4 text-sm text-muted-foreground/80 font-medium">
+                        <li><a href="#" className="hover:text-primary transition-colors">Features</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Platform Support</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">CLI Tool</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Chrome Extension</a></li>
+                    </ul>
+                </div>
+
+                <div>
+                    <h4 className="font-bold text-sm mb-6 uppercase tracking-widest text-primary">Resources</h4>
+                    <ul className="space-y-4 text-sm text-muted-foreground/80 font-medium">
+                        <li><a href="#" className="hover:text-primary transition-colors">Documentation</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">API Reference</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Status Page</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Community</a></li>
+                    </ul>
+                </div>
+
+                <div>
+                    <h4 className="font-bold text-sm mb-6 uppercase tracking-widest text-primary">Support</h4>
+                    <ul className="space-y-4 text-sm text-muted-foreground/80 font-medium">
+                        <li><a href="#" className="hover:text-primary transition-colors">Help Center</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Discord Server</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Contact Us</a></li>
+                        <li><a href="#" className="hover:text-primary transition-colors">Sponsorships</a></li>
+                    </ul>
+                </div>
             </div>
-            <div className="flex gap-8 text-sm font-medium text-muted-foreground/60">
-                <a href="#" className="hover:text-primary transition-colors">Privacy</a>
-                <a href="#" className="hover:text-primary transition-colors">Terms</a>
-                <a href="#" className="hover:text-primary transition-colors">Discord</a>
+
+            {/* Bottom Bar */}
+            <div className="pt-8 border-t flex flex-col md:flex-row justify-between items-center gap-6">
+                <p className="text-xs text-muted-foreground/60 font-medium">
+                    © 2026 DLX UNIVERSAL. Open source under MIT License.
+                </p>
+                <div className="flex gap-8 text-xs font-bold text-muted-foreground/40 uppercase tracking-widest font-mono">
+                    <a href="#" className="hover:text-primary transition-colors">Privacy Policy</a>
+                    <a href="#" className="hover:text-primary transition-colors">Terms of Service</a>
+                    <span className="text-primary/20">BUILD 0.0.1_STABLE</span>
+                </div>
             </div>
-            <p className="text-xs text-muted-foreground/40 font-mono">
-                BUILD 0.0.1_STABLE
-            </p>
         </div>
       </footer>
     </div>
   )
+}
+
+function ModeToggle() {
+    const { setTheme } = useTheme()
+
+    const toggleTheme = () => {
+        const isDark = document.documentElement.classList.contains("dark")
+        setTheme(isDark ? "light" : "dark")
+    }
+
+    return (
+        <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={toggleTheme}
+            className="rounded-full h-10 w-10 transition-all duration-300 hover:bg-primary/10 group relative"
+            title="Toggle Theme"
+        >
+            <HiSun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0 text-primary group-hover:scale-110 dark:group-hover:scale-0" />
+            <HiMoon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100 text-primary group-hover:scale-0 dark:group-hover:scale-110" />
+            <span className="sr-only">Toggle theme</span>
+        </Button>
+    )
+}
+
+function SocialLink({ href, icon }: { href: string, icon: React.ReactNode }) {
+    return (
+        <a href={href} className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground hover:bg-primary hover:text-primary-foreground transition-all duration-300">
+            {React.isValidElement(icon) && React.cloneElement(icon as React.ReactElement<{ className?: string }>, { 
+                className: "h-5 w-5" 
+            })}
+        </a>
+    )
 }
 
 function CheckCircleIcon() {
