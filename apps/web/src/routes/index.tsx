@@ -1,15 +1,15 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { Button } from "@workspace/ui/components/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
-import { Input } from "@workspace/ui/components/input"
 import { Logo } from "@workspace/ui/components/logo"
 import { HiDownload, HiShieldCheck, HiOutlineLightningBolt, HiOutlineChevronRight, HiSun, HiMoon, HiMenu } from "react-icons/hi"
 import { FaYoutube, FaFacebook, FaTiktok, FaGithub, FaDiscord, FaSquareXTwitter } from "react-icons/fa6"
 import { BiGlobe } from "react-icons/bi"
 import { useTheme } from "@workspace/ui/components/theme-provider"
 import { cn } from "@workspace/ui/lib/utils"
+import { useState } from "react"
+import { crawlUrlAction } from "../lib/actions"
 import { 
     Sheet, 
     SheetContent, 
@@ -22,6 +22,27 @@ import {
 export const Route = createFileRoute("/")({ component: LandingPage })
 
 function LandingPage() {
+  const [url, setUrl] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [videoData, setVideoData] = useState<any>(null)
+
+  const handleCrawl = async () => {
+    if (!url.trim() || isLoading) return
+    setIsLoading(true)
+    setError(null)
+    setVideoData(null)
+    
+    try {
+        const result = await crawlUrlAction({ data: url })
+        setVideoData(result)
+    } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to crawl video. Please check the URL.")
+    } finally {
+        setIsLoading(false)
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground font-sans selection:bg-primary/20 scroll-smooth">
       {/* Detailed Header */}
@@ -47,21 +68,21 @@ function LandingPage() {
         </div>
       </nav>
 
-      {/* Hero Section - The Core Utility */}
-      <section className="flex flex-1 flex-col items-center justify-center py-20 px-6 text-center lg:py-32">
-        <div className="container mx-auto max-w-4xl space-y-8">
-          <Badge className="bg-primary/10 text-primary border-primary/20 px-4 py-1.5 rounded-full font-semibold">
-            Speed. Simplicity. Security.
+      <section className="relative overflow-hidden pt-20 pb-16 lg:pt-32 lg:pb-24">
+        {/* Glow Effects */}
+        <div className="absolute top-0 left-1/2 -z-10 h-[600px] w-[600px] -translate-x-1/2 rounded-full bg-primary/20 blur-[120px]" />
+        
+        <div className="container mx-auto px-6 text-center">
+          <Badge variant="outline" className="mb-6 px-4 py-1.5 border-primary/20 bg-primary/5 text-primary tracking-wide font-semibold">
+            ✨ Premium Extraction Logic
           </Badge>
           
-          <h1 className="text-5xl font-extrabold tracking-tight sm:text-7xl leading-tight">
-            Universal Media <br />
-            <span className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent italic">Extraction.</span>
+          <h1 className="mb-6 text-4xl font-extrabold tracking-tight sm:text-6xl lg:text-7xl">
+            Universal <span className="text-primary">Media</span> Extraction
           </h1>
           
-          <p className="mx-auto max-w-2xl text-lg text-muted-foreground/80 leading-relaxed">
-            Download high-quality video streams from YouTube, Facebook, and TikTok. 
-            Native support for private Facebook videos and multi-threaded processing.
+          <p className="mx-auto mb-10 max-w-2xl text-lg text-muted-foreground/80 leading-relaxed">
+            Native support for YouTube, Facebook and TikTok. Fetch high-quality streams instantly using our parallel processing logic.
           </p>
 
           {/* Custom Core App Interaction */}
@@ -77,17 +98,90 @@ function LandingPage() {
                   </div>
                   <input 
                     type="url"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleCrawl() }}
                     placeholder="Paste your video URL here..." 
                     className="w-full bg-transparent h-14 pl-12 pr-4 text-base font-medium outline-none placeholder:text-muted-foreground/30 text-foreground"
+                    disabled={isLoading}
                   />
                 </div>
                 
-                <button className="h-14 px-8 bg-primary rounded-xl text-primary-foreground font-bold flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-[0.98] transition-all shadow-lg shadow-primary/20">
-                  <HiDownload className="h-5 w-5" />
-                  <span>Download Now</span>
+                <button 
+                  onClick={handleCrawl}
+                  disabled={isLoading || !url.trim()}
+                  className="h-14 px-8 bg-primary rounded-xl text-primary-foreground font-bold flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 transition-all shadow-lg shadow-primary/20"
+                >
+                  {isLoading ? (
+                      <div className="flex items-center gap-2">
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                        <span>Crawling...</span>
+                      </div>
+                  ) : (
+                      <>
+                        <HiDownload className="h-5 w-5" />
+                        <span>Download Now</span>
+                      </>
+                  )}
                 </button>
               </div>
             </div>
+
+            {error && (
+                <div className="mt-4 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm font-medium">
+                    {error}
+                </div>
+            )}
+            
+            {/* Download Results */}
+            {videoData && (
+                <div className="mt-12 text-left bg-card border rounded-3xl p-6 shadow-2xl animate-in fade-in slide-in-from-bottom-5 duration-500">
+                    <div className="flex flex-col md:flex-row gap-6">
+                        {videoData.thumbnail && (
+                            <div className="w-full md:w-48 aspect-video rounded-2xl overflow-hidden bg-muted group relative">
+                                <img 
+                                    src={videoData.thumbnail} 
+                                    className="w-full h-full object-cover transition-transform group-hover:scale-110 duration-500" 
+                                    alt="Video preview" 
+                                />
+                                <div className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/60 backdrop-blur-md text-[10px] font-bold text-white uppercase tracking-wider">
+                                    {videoData.platform}
+                                </div>
+                            </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                            <h3 className="text-xl font-bold mb-1 truncate">{videoData.title}</h3>
+                            <p className="text-sm text-muted-foreground/60 mb-6 uppercase tracking-wider font-bold">Available qualities</p>
+                            
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                {videoData.resolutions?.map((res: any, idx: number) => (
+                                    <a 
+                                        key={idx}
+                                        href={res.url} 
+                                        target="_blank"
+                                        className="flex flex-col items-center justify-center p-3 rounded-xl bg-muted/50 border hover:bg-primary hover:text-primary-foreground transition-all group"
+                                    >
+                                        <span className="text-sm font-black">{res.quality || res.qualityLabel}</span>
+                                        <span className="text-[10px] opacity-40 group-hover:opacity-100 uppercase font-bold tracking-tighter">
+                                            {res.format || res.mimeType?.split(';')[0]?.split('/')[1] || 'video'}
+                                        </span>
+                                    </a>
+                                ))}
+                                {videoData.audio && (
+                                     <a 
+                                        href={videoData.audio.url} 
+                                        target="_blank"
+                                        className="flex flex-col items-center justify-center p-3 rounded-xl bg-primary/10 border-primary/20 hover:bg-primary hover:text-primary-foreground transition-all group"
+                                     >
+                                         <span className="text-sm font-black">MP3 Audio</span>
+                                         <span className="text-[10px] opacity-40 group-hover:opacity-100 uppercase font-bold tracking-tighter">High Quality</span>
+                                     </a>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             
             <div className="mt-6 flex flex-wrap justify-center gap-6 text-[10px] font-bold text-muted-foreground/40 uppercase tracking-[0.2em]">
               <span className="flex items-center gap-2">
@@ -304,13 +398,7 @@ function SocialLink({ href, icon }: { href: string, icon: React.ReactNode }) {
     )
 }
 
-function CheckCircleIcon() {
-  return (
-    <div className="h-4 w-4 bg-primary/10 rounded-full flex items-center justify-center">
-        <div className="h-1.5 w-1.5 bg-primary rounded-full" />
-    </div>
-  )
-}
+
 
 function FeatureItem({ icon, title, description }: { icon: React.ReactNode, title: string, description: string }) {
   return (
