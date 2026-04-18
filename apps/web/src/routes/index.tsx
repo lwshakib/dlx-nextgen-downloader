@@ -3,6 +3,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@workspace/ui/components/card"
 import { Badge } from "@workspace/ui/components/badge"
 import { Input } from "@workspace/ui/components/input"
+import { Logo } from "@workspace/ui/components/logo"
 import { 
   Download, 
   Zap, 
@@ -14,7 +15,7 @@ import {
   Settings,
   MoreVertical,
   Pause,
-  Play
+Play
 } from "lucide-react"
 
 export const Route = createFileRoute("/")({ component: LandingPage })
@@ -26,9 +27,7 @@ function LandingPage() {
       <nav className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-md">
         <div className="container mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Download className="h-5 w-5" />
-            </div>
+            <Logo size={32} className="text-primary" />
             <span className="text-xl font-bold tracking-tight">DLX <span className="text-muted-foreground uppercase text-sm">Nextgen</span></span>
           </div>
           <div className="hidden md:flex items-center gap-8">
