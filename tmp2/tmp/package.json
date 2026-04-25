@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "install:all": "cd flux-desktop && bun install && cd ../flux-web && bun install && cd ../flux-extension && bun install"
+  }
+}
