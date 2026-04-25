@@ -27,10 +27,12 @@ interface TikTokResolution {
   width: number | null;
   height: number | null;
   url: string | null;
+  sizeFormatted?: string;
 }
 
 interface TikTokData {
-  title: string | null;
+  id: string | null;
+  description: string | null;
   thumbnail: string | null;
   resolutions: TikTokResolution[];
   tokens?: {
@@ -54,77 +56,127 @@ function getQualityLabel(height?: number | null, qualityType?: string | null) {
 }
 
 async function crawlTikTok(url: string): Promise<TikTokData> {
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-      Referer: "https://www.tiktok.com/",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
+  // First fetch to get cookies and tokens (NO HEADERS to avoid bot detection)
+  const res1 = await fetch(url);
 
-  if (!response.ok) throw new Error(`Failed to fetch TikTok page: ${response.status}`);
-  
-  // Extract cookies
+  if (!res1.ok) {
+    throw new Error(`Failed to fetch page first time (${res1.status} ${res1.statusText})`);
+  }
+
   let setCookies: string[] = [];
-  const anyHeaders = response.headers as any;
-  if (typeof anyHeaders.getSetCookie === "function") {
+  const anyHeaders = res1.headers as any;
+  if (typeof anyHeaders.getSetCookie === 'function') {
     setCookies = anyHeaders.getSetCookie();
   } else {
-    const single = response.headers.get("set-cookie");
+    const single = res1.headers.get('set-cookie');
     if (single) {
+      // Robust split for environments where getSetCookie is missing
       setCookies = single.split(/,(?=[^;]+?=)/g);
     }
   }
 
   const cookies: Record<string, string> = {};
   for (const line of setCookies) {
-    const [cookiePart] = line.split(";");
+    const [cookiePart] = line.split(';');
     if (!cookiePart) continue;
-    const [name, ...rest] = cookiePart.split("=");
-    const value = rest.join("=");
-    if (!name) continue;
-    cookies[name.trim()] = value.trim();
+    const [name, ...rest] = cookiePart.split('=');
+    if (name) cookies[name.trim()] = rest.join('=').trim();
   }
 
   const msToken = cookies.msToken || cookies.mstoken;
   const ttChainToken = cookies.tt_chain_token || cookies.tt_chain_token_v2;
+  const cookieString = setCookies.map(c => c.split(';')[0]).join('; ');
 
-  const html = await response.text();
+  // Second fetch with cookies to get the real HTML
+  const res2 = await fetch(url, {
+    headers: {
+      'Cookie': cookieString
+    },
+  });
 
-  const regex = new RegExp(`<script[^>]+id="${SCRIPT_ID}"[^>]*>([\\s\\S]*?)<\\/script>`, "i");
+  if (!res2.ok) {
+    throw new Error(`Failed to fetch page second time (${res2.status} ${res2.statusText})`);
+  }
+
+  const html = await res2.text();
+  const escapedId = SCRIPT_ID.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const regex = new RegExp(`<script[^>]+id="${escapedId}"[^>]*>([\\s\\S]*?)<\\/script>`, 'i');
   const match = html.match(regex);
-  if (!match) throw new Error("Unable to find TikTok rehydration data.");
+
+  if (!match) {
+    const foundIds = Array.from(html.matchAll(/<script[^>]+id="([^"]+)"/g)).map(m => m[1]);
+    throw new Error(`Unable to find TikTok rehydration data. Found script IDs: ${foundIds.join(', ')}`);
+  }
 
   const parsed = JSON.parse(match[1]!.trim());
-  const defaultScope = parsed?.__DEFAULT_SCOPE__;
-  const itemStruct = defaultScope?.["webapp.video-detail"]?.itemInfo?.itemStruct;
+  const defaultScope = parsed.__DEFAULT_SCOPE__;
+  const itemStruct = defaultScope?.['webapp.video-detail']?.itemInfo?.itemStruct;
 
   if (!itemStruct) throw new Error("Video detail data was not found in the TikTok page.");
 
   const video = itemStruct.video;
-  const bitrateInfo = Array.isArray(video?.bitrateInfo) ? video.bitrateInfo : [];
+  // Handle various property name variations (bitrateInfo vs bitrate_info)
+  const bitrateInfo = Array.isArray(video?.bitrateInfo) 
+    ? video.bitrateInfo 
+    : (Array.isArray(video?.bitrate_info) ? video.bitrate_info : []);
+
+  const resolutions: TikTokResolution[] = bitrateInfo
+    .map((entry: any) => {
+      // Handle case variations for properties inside entry
+      const playAddr = entry.PlayAddr || entry.play_addr || entry.playAddr;
+      const height = playAddr?.Height || playAddr?.height || null;
+      const width = playAddr?.Width || playAddr?.width || null;
+      const bitrate = entry.Bitrate || entry.bitrate || null;
+      const codec = entry.CodecType || entry.codec_type || entry.codec || null;
+      const dataSize = playAddr?.DataSize || playAddr?.data_size || playAddr?.size || null;
+      const url = playAddr?.UrlList?.[0] || playAddr?.url_list?.[0] || playAddr?.url || null;
+
+      let qualityLabel = null;
+      if (entry.GearName || entry.gear_name) {
+         const m = (entry.GearName || entry.gear_name).match(/(\d{3,4})/);
+         if (m) qualityLabel = `${m[1]}p`;
+      }
+      if (!qualityLabel) qualityLabel = getQualityLabel(height, entry.QualityType || entry.quality_type || null);
+      
+      const sizeFormatted = dataSize ? formatBytes(parseInt(dataSize, 10)) : 'Unknown size';
+
+      return {
+        qualityType: entry.QualityType || entry.quality_type || null,
+        qualityLabel,
+        bitrate,
+        codec,
+        width,
+        height,
+        url,
+        sizeFormatted
+      };
+    })
+    .filter((entry: TikTokResolution) => entry.url)
+    .sort((a: TikTokResolution, b: TikTokResolution) => (b.bitrate || 0) - (a.bitrate || 0));
+
+  // Fallback to primary addresses if no bitrate info is found
+  if (resolutions.length === 0 && video) {
+    const primaryUrl = video.downloadAddr || video.playAddr || video.play_addr;
+    if (primaryUrl) {
+      resolutions.push({
+        qualityType: video.videoQuality || 'original',
+        qualityLabel: video.definition || 'Original',
+        bitrate: video.bitrate || null,
+        codec: video.codecType || null,
+        width: video.width || null,
+        height: video.height || null,
+        url: primaryUrl,
+        sizeFormatted: video.size ? formatBytes(parseInt(video.size, 10)) : 'Unknown size'
+      });
+    }
+  }
 
   return {
-    title: itemStruct.desc ?? null,
+    id: itemStruct.id ?? null,
+    description: itemStruct.desc ?? null,
     thumbnail: video?.cover ?? null,
-    tokens: {
-      msToken: msToken ?? null,
-      ttChainToken: ttChainToken ?? null,
-    },
-    resolutions: bitrateInfo
-      .map((entry: any) => {
-        const height = entry.PlayAddr?.Height ?? null;
-        return {
-          qualityType: entry.QualityType ?? null,
-          qualityLabel: getQualityLabel(height, entry.QualityType ?? null),
-          bitrate: entry.Bitrate ?? null,
-          codec: entry.CodecType ?? null,
-          width: entry.PlayAddr?.Width ?? null,
-          height,
-          url: entry.PlayAddr?.UrlList?.[0] ?? null,
-        };
-      })
-      .filter((entry: any) => entry.url),
+    tokens: { msToken: msToken ?? null, ttChainToken: ttChainToken ?? null },
+    resolutions
   };
 }
 
@@ -171,22 +223,28 @@ async function main() {
           throw new Error('No downloadable resolutions found for this TikTok video.');
         }
 
-        console.log(chalk.green(`\nFound: ${chalk.white(tiktokData.title || 'Untitled Video')}`));
+        console.log(chalk.green(`\nFound: ${chalk.white(tiktokData.description || 'Untitled Video')}`));
+        console.log(chalk.gray(`Available Qualities: ${tiktokData.resolutions.length}\n`));
 
         const choice = await inquirer.prompt([
           {
-            type: 'list',
+            type: 'select',
             name: 'resolution',
-            message: 'Select quality:',
+            message: 'Select quality to download:',
+            pageSize: 10,
             choices: tiktokData.resolutions.map((res) => ({
-              name: `${res.qualityLabel || 'Unknown'} (${res.codec || 'N/A'}, ${res.bitrate ? (res.bitrate / 1000).toFixed(0) + 'kbps' : 'N/A'})`,
+              name: `${chalk.bold(res.qualityLabel || 'Unknown')} - ${chalk.cyan(res.codec || 'N/A')} - ${chalk.yellow(res.bitrate ? (res.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A')} - ${chalk.green(res.sizeFormatted)}`,
               value: res
             })),
           },
         ]);
 
         url = choice.resolution.url;
-        filename = `${(tiktokData.title || 'tiktok_video').substring(0, 30).replace(/[^a-z0-9]/gi, '_')}_${choice.resolution.qualityLabel}.mp4`;
+        
+        // Robust filename: Description (max 50 chars) -> fallback to ID
+        const cleanDescription = (tiktokData.description || '').replace(/[^a-z0-9]/gi, '_').substring(0, 50).replace(/_{2,}/g, '_').replace(/^_|_$/g, '');
+        const baseName = cleanDescription || tiktokData.id || `tiktok_${Date.now()}`;
+        filename = `${baseName}_${choice.resolution.qualityLabel}.mp4`;
       } catch (err) {
         console.error(chalk.red(`\nError crawling TikTok: ${err instanceof Error ? err.message : String(err)}`));
         return;
