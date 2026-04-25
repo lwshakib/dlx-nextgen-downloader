@@ -9,6 +9,7 @@ import path from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Buffer } from 'buffer';
+import { execSync } from 'child_process';
 
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return '0 Bytes';
@@ -180,6 +181,409 @@ async function crawlTikTok(url: string): Promise<TikTokData> {
   };
 }
 
+interface YouTubeResolution {
+  itags: number[];
+  qualityLabel: string;
+  bitrate: number;
+  codec: string;
+  mimeType: string;
+  url: string;
+  sizeFormatted: string;
+  isAdaptive: boolean;
+}
+
+interface YouTubeData {
+  id: string;
+  title: string;
+  description: string;
+  thumbnail: string;
+  resolutions: YouTubeResolution[];
+  apiKey: string;
+  visitorData: string;
+  cookies: string;
+}
+
+class YouTubeCookieJar {
+  private cookies: Record<string, string> = {};
+
+  update(setCookie: string[] | null) {
+    if (!setCookie) return;
+    setCookie.forEach(line => {
+      const part = line.split(';')[0];
+      if (part) {
+        const [key, ...rest] = part.split('=');
+        if (key) this.cookies[key.trim()] = rest.join('=').trim();
+      }
+    });
+  }
+
+  getHeader(): string {
+    return Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  }
+}
+
+async function crawlYouTube(videoId: string): Promise<YouTubeData> {
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const embedUrl = `https://www.youtube.com/embed/${videoId}`;
+  const tvUserAgent = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)";
+  const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const jar = new YouTubeCookieJar();
+  
+  let html = "";
+  let streamingData: any = null;
+  let videoDetails: any = null;
+  let lastError = "";
+
+  // Approach 1: Direct HTML Extraction (Bypasses Player API)
+  try {
+    const res = await fetch(watchUrl, { 
+      headers: { 
+        "User-Agent": tvUserAgent,
+        "Referer": "https://www.youtube.com/"
+      } 
+    });
+    jar.update(res.headers.getSetCookie ? res.headers.getSetCookie() : []);
+    html = await res.text();
+
+    const playerResMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\});/);
+    if (playerResMatch && playerResMatch[1]) {
+      const data = JSON.parse(playerResMatch[1]);
+      if (data.streamingData) {
+        streamingData = data.streamingData;
+        videoDetails = data.videoDetails;
+      }
+    }
+  } catch (e) {}
+
+  // If HTML extraction failed, try Approach 2: Player API Rotation
+  let apiKey = (html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i) || [])[1];
+
+  if (!streamingData && !apiKey) {
+    const resEmbed = await fetch(embedUrl, { headers: { "User-Agent": browserUserAgent, "Referer": "https://www.youtube.com/" } });
+    jar.update(resEmbed.headers.getSetCookie ? resEmbed.headers.getSetCookie() : []);
+    html = await resEmbed.text();
+    apiKey = (html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i) || [])[1];
+  }
+                  
+  const visitorData = (html.match(/"visitorData":"([^"]+)"/) || html.match(/visitor_data":"([^"]+)"/i) || [])[1] || "";
+  
+  if (!streamingData && !apiKey) {
+    const isBlocked = html.includes('recaptcha') || html.includes('bot detection') || html.includes('consent.youtube.com');
+    throw new Error(`Could not find YouTube stream data or API key.${isBlocked ? ' (YouTube blocked the request)' : ''}`);
+  }
+
+  if (!streamingData) {
+    const clients = [
+      { 
+        name: "WEB_EMBEDDED_PLAYER", 
+      version: "1.20240101.01.01", 
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+    { 
+      name: "TVHTML5", 
+      version: "7.20230405.08.01", 
+      userAgent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)"
+    },
+    { 
+      name: "ANDROID", 
+      version: "19.30.36", 
+      userAgent: "com.google.android.youtube/19.30.36 (Linux; U; Android 14; en_US) gzip"
+    }
+  ];
+
+  for (const client of clients) {
+    try {
+      const payload = {
+        context: {
+          client: {
+            clientName: client.name,
+            clientVersion: client.version,
+            userAgent: client.userAgent,
+            hl: 'en', gl: 'US', visitorData
+          }
+        },
+        videoId
+      };
+
+      const playerRes = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "User-Agent": client.userAgent,
+          "Cookie": jar.getHeader(),
+          "X-Youtube-Client-Name": client.name === "WEB_EMBEDDED_PLAYER" ? "1" : (client.name === "TVHTML5" ? "7" : "3"),
+          "X-Youtube-Client-Version": client.version
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const apiData = await playerRes.json() as any;
+      if (apiData.streamingData) {
+        streamingData = apiData.streamingData;
+        videoDetails = apiData.videoDetails;
+        break; // Success! Exit the rotation loop
+      }
+      
+      if (apiData.playabilityStatus) lastError = apiData.playabilityStatus.reason || apiData.playabilityStatus.status;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+  }
+}
+
+  // Parse findings into resolutions
+  if (streamingData) {
+    const title = videoDetails?.title || "YouTube Video";
+    const description = videoDetails?.shortDescription || "";
+    const thumbnail = videoDetails?.thumbnail?.thumbnails?.pop()?.url || "";
+    const resolutions: YouTubeResolution[] = [];
+
+    const allFormats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
+    allFormats.forEach((f: any) => {
+      if (f.url) {
+        const isVideo = f.mimeType.includes('video/');
+        if (isVideo) {
+          resolutions.push({
+            itags: [f.itag],
+            qualityLabel: f.qualityLabel || (f.height ? `${f.height}p` : 'Unknown'),
+            bitrate: f.bitrate,
+            codec: f.mimeType.split(';')[0],
+            mimeType: f.mimeType,
+            url: f.url,
+            sizeFormatted: f.contentLength ? formatBytes(parseInt(f.contentLength, 10)) : 'Unknown',
+            isAdaptive: !f.mimeType.includes('audio/')
+          });
+        }
+      }
+    });
+
+    if (resolutions.length > 0) {
+      return { id: videoId, title, description, thumbnail, resolutions: resolutions.sort((a, b) => b.bitrate - a.bitrate), apiKey: apiKey || "", visitorData, cookies: jar.getHeader() };
+    }
+  }
+
+  throw new Error(`YouTube failed all attempts. Last error: ${lastError || 'No streaming data found'}`);
+}
+
+async function getBestYouTubeAudio(videoId: string, apiKey: string, visitorData: string): Promise<string> {
+  const payload = {
+    context: {
+      client: {
+        clientName: "IOS",
+        clientVersion: "19.29.1",
+        userAgent: "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)",
+        visitorData
+      }
+    },
+    videoId
+  };
+
+  const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json() as any;
+  const audioFormat = data.streamingData?.adaptiveFormats
+    ?.filter((f: any) => f.mimeType.includes('audio/'))
+    ?.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+
+  if (!audioFormat?.url) throw new Error("Could not find audio stream for YouTube video.");
+  return audioFormat.url;
+}
+
+interface FacebookResolution {
+  url: string;
+  width: number;
+  height: number;
+  quality: string;
+  format: string;
+  bitrate?: number;
+}
+
+interface FacebookAudioResolution {
+  url: string;
+  bandwidth: number;
+}
+
+interface FacebookData {
+  id: string;
+  title: string;
+  thumbnail: string;
+  resolutions: FacebookResolution[];
+  audio?: FacebookAudioResolution;
+}
+
+function cleanFbUrl(url: string | null | undefined) {
+    if (!url) return "";
+    return url.replace(/\\\//g, '/')
+              .replace(/\\u00253D/g, '=')
+              .replace(/\\u0025/g, '%')
+              .replace(/&amp;/g, '&');
+}
+
+function decodeFbUnicode(str: string | null | undefined) {
+    if (!str) return str;
+    return str.replace(/\\u([a-fA-F0-9]{4})/g, (match, grp) => String.fromCharCode(parseInt(grp, 16)));
+}
+
+async function crawlFacebook(url: string): Promise<FacebookData> {
+    let targetUrl = url;
+    if (url.includes('fb.watch')) {
+      try {
+        const res = await axios.get(url, { maxRedirects: 5 });
+        targetUrl = res.request?.res?.responseUrl || url;
+      } catch (e) {
+        // Ignore and proceed
+      }
+    }
+
+    const finalIdMatch = targetUrl.match(/\/reel\/(\d+)/) || targetUrl.match(/\/videos\/(\d+)/) || targetUrl.match(/fbid=(\d+)/) || targetUrl.match(/v=(\d+)/);
+    
+    const response = await fetch(targetUrl, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1'
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`Failed to fetch Facebook page (${response.status})`);
+    }
+
+    const content = await response.text();
+
+    let targetVideoId = finalIdMatch ? finalIdMatch[1] : null;
+    if (!targetVideoId) {
+       const currVidMatch = content.match(/"currentVideoID":"(\d+)"/);
+       if (currVidMatch) targetVideoId = currVidMatch[1];
+       else {
+         const videoIdMatch = content.match(/"video_id":"(\d+)"/);
+         if (videoIdMatch) targetVideoId = videoIdMatch[1];
+       }
+    }
+
+    if (!targetVideoId) {
+        throw new Error('Could not extract video ID from URL or page content.');
+    }
+
+    const scriptRegex = /<script type="application\/json"[^>]*data-sjs>([\s\S]*?)<\/script>/g;
+    let match;
+    let metadata = {
+        title: null as string | null | undefined,
+        description: null as string | null | undefined,
+        owner: { name: null as string | null | undefined, id: null as string | null | undefined },
+        duration: null as number | null | undefined,
+        thumbnail_url: null as string | null | undefined
+    };
+
+    let representations: any[] = [];
+
+    while ((match = scriptRegex.exec(content)) !== null) {
+        const jsonStr = match[1] || "";
+        if (jsonStr.includes(targetVideoId)) {
+            const msgMatch = /"message":\{"text":"((?:[^"\\]|\\.)*)"\}/.exec(jsonStr);
+            if (msgMatch && !metadata.description) metadata.description = decodeFbUnicode(msgMatch[1]);
+
+            const ownerIdMatch = /"owner":\{[^}]*?"id":"(\d+)"/.exec(jsonStr);
+            const ownerNameMatch = /"video_owner":\{[^}]*?"name":"((?:[^"\\]|\\.)*)"/.exec(jsonStr) 
+                                 || /"owner":\{[^}]*?"name":"((?:[^"\\]|\\.)*)"/.exec(jsonStr);
+            if (ownerIdMatch && !metadata.owner.id) metadata.owner.id = ownerIdMatch[1];
+            if (ownerNameMatch && !metadata.owner.name) metadata.owner.name = decodeFbUnicode(ownerNameMatch[1]);
+
+            const thumbMatch = /"preferred_thumbnail":\{"image":\{"uri":"((?:[^"\\]|\\.)*)"/.exec(jsonStr) 
+                            || /"thumbnail":\{"uri":"((?:[^"\\]|\\.)*)"/.exec(jsonStr);
+            if (thumbMatch && !metadata.thumbnail_url) metadata.thumbnail_url = cleanFbUrl(thumbMatch[1]);
+
+            const durMatch = /"duration":([\d.]+)/.exec(jsonStr);
+            if (durMatch && !metadata.duration) metadata.duration = parseFloat(durMatch[1] || "0");
+
+            const titleMatch = /"title":"((?:[^"\\]|\\.)*)"/.exec(jsonStr);
+            if (titleMatch && !metadata.title) metadata.title = decodeFbUnicode(titleMatch[1]);
+
+            if (jsonStr.includes('"representations":[')) {
+                const vidIndex = jsonStr.indexOf(`"video_id":"${targetVideoId}"`) !== -1 
+                  ? jsonStr.indexOf(`"video_id":"${targetVideoId}"`)
+                  : jsonStr.indexOf(`"video_id":${targetVideoId}`);
+                  
+                if (vidIndex !== -1) {
+                    const repsLabel = '"representations":[';
+                    const repsStartIndex = jsonStr.lastIndexOf(repsLabel, vidIndex);
+                    if (repsStartIndex !== -1) {
+                        let bracketCount = 1;
+                        let repsEndIndex = repsStartIndex + repsLabel.length;
+                        while (bracketCount > 0 && repsEndIndex < jsonStr.length) {
+                            if (jsonStr[repsEndIndex] === '[') bracketCount++;
+                            if (jsonStr[repsEndIndex] === ']') bracketCount--;
+                            repsEndIndex++;
+                        }
+                        const repsJson = jsonStr.substring(repsStartIndex + '"representations":'.length, repsEndIndex);
+                        try {
+                            const parsedReps = JSON.parse(repsJson);
+                            representations = parsedReps.map((rep: any) => {
+                                if (rep.base_url) rep.base_url = cleanFbUrl(rep.base_url);
+                                if (rep.mime_type) rep.mime_type = rep.mime_type.replace(/\\\//g, '/');
+                                return rep;
+                            });
+                        } catch (e) {}
+                    }
+                }
+            }
+        }
+    }
+
+    if (representations.length === 0) {
+        throw new Error(`Could not find detailed representation data for video ID ${targetVideoId}.`);
+    }
+
+    const videoReps = representations.filter(r => r.mime_type && r.mime_type.startsWith('video/'));
+    const audioReps = representations.filter(r => r.mime_type && r.mime_type.startsWith('audio/'));
+
+    const parsedResolutions: FacebookResolution[] = videoReps.map(r => {
+        const height = r.height || 0;
+        let quality = `${height}p`;
+        if (height === 0) quality = "Unknown";
+        return {
+            url: r.base_url,
+            width: r.width || 0,
+            height,
+            quality,
+            format: 'mp4',
+            bitrate: r.bandwidth || 0
+        };
+    }).sort((a, b) => b.height - a.height);
+
+    let bestAudio: FacebookAudioResolution | undefined = undefined;
+    if (audioReps.length > 0) {
+        const bestAudioRep = [...audioReps].sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
+        if (bestAudioRep) {
+            bestAudio = {
+                url: bestAudioRep.base_url,
+                bandwidth: bestAudioRep.bandwidth || 0
+            };
+        }
+    }
+
+    const title = metadata.title || metadata.description || `Facebook Video ${targetVideoId}`;
+    const result: FacebookData = {
+        id: targetVideoId,
+        title: title,
+        thumbnail: metadata.thumbnail_url || '',
+        resolutions: parsedResolutions
+    };
+    if (bestAudio) result.audio = bestAudio;
+    return result;
+}
+
+
+
 async function main() {
   // Clear the console for a clean start
   console.clear();
@@ -212,6 +616,8 @@ async function main() {
     let url = answers.url;
     let filename = '';
     let tiktokTokens: { msToken: string | null; ttChainToken: string | null } | null = null;
+    let isYouTube = false;
+    let audioUrlToMux = '';
 
     const urlObj = new URL(url);
     if (urlObj.hostname.includes('tiktok.com')) {
@@ -247,6 +653,83 @@ async function main() {
         filename = `${baseName}_${choice.resolution.qualityLabel}.mp4`;
       } catch (err) {
         console.error(chalk.red(`\nError crawling TikTok: ${err instanceof Error ? err.message : String(err)}`));
+        return;
+      }
+    } else if (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be')) {
+      console.log(chalk.yellow('\nCrawling YouTube video...'));
+      try {
+        let videoId = urlObj.searchParams.get('v');
+        if (!videoId && urlObj.hostname.includes('youtu.be')) {
+          videoId = urlObj.pathname.slice(1);
+        }
+        if (!videoId) throw new Error("Invalid YouTube URL: Could not find video ID.");
+
+        const ytData = await crawlYouTube(videoId);
+        isYouTube = true;
+
+        console.log(chalk.green(`\nFound: ${chalk.white(ytData.title)}`));
+        console.log(chalk.gray(`Available Qualities: ${ytData.resolutions.length}\n`));
+
+        const choice = await inquirer.prompt([
+          {
+            type: 'select',
+            name: 'resolution',
+            message: 'Select YouTube quality:',
+            pageSize: 10,
+            choices: ytData.resolutions.map((res) => ({
+              name: `${chalk.bold(res.qualityLabel)} - ${chalk.cyan(res.codec)} - ${chalk.yellow((res.bitrate / 1000).toFixed(0) + ' kbps')} - ${chalk.green(res.sizeFormatted)}`,
+              value: res
+            })),
+          },
+        ]);
+
+        url = choice.resolution.url;
+        const selectedRes = choice.resolution as YouTubeResolution;
+
+        if (selectedRes.isAdaptive) {
+          console.log(chalk.blue('Adaptive quality selected. Fetching audio stream...'));
+          audioUrlToMux = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData);
+        }
+
+        const cleanTitle = ytData.title.replace(/[^a-z0-9]/gi, '_').substring(0, 50).replace(/_{2,}/g, '_').replace(/^_|_$/g, '');
+        filename = `${cleanTitle}_${selectedRes.qualityLabel.split(' ')[0]}.mp4`;
+      } catch (err) {
+        console.error(chalk.red(`\nError crawling YouTube: ${err instanceof Error ? err.message : String(err)}`));
+        return;
+      }
+    } else if (urlObj.hostname.includes('facebook.com') || urlObj.hostname.includes('fb.watch')) {
+      console.log(chalk.yellow('\nCrawling Facebook video...'));
+      try {
+        const fbData = await crawlFacebook(url);
+        if (fbData.resolutions.length === 0) {
+          throw new Error('No downloadable resolutions found for this Facebook video.');
+        }
+
+        console.log(chalk.green(`\nFound: ${chalk.white(fbData.title)}`));
+        console.log(chalk.gray(`Available Qualities: ${fbData.resolutions.length}\n`));
+
+        const choice = await inquirer.prompt([
+          {
+            type: 'select',
+            name: 'resolution',
+            message: 'Select Facebook quality:',
+            pageSize: 10,
+            choices: fbData.resolutions.map((res) => ({
+              name: `${chalk.bold(res.quality)} - ${chalk.cyan(res.format.toUpperCase())} - ${chalk.yellow(res.bitrate ? (res.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A')}`,
+              value: res
+            })),
+          },
+        ]);
+
+        url = choice.resolution.url;
+        if (fbData.audio) {
+           console.log(chalk.blue('Separate audio stream detected. Will mux with video.'));
+           audioUrlToMux = fbData.audio.url;
+        }
+        const cleanTitle = fbData.title.replace(/[^a-z0-9]/gi, '_').substring(0, 50).replace(/_{2,}/g, '_').replace(/^_|_$/g, '');
+        filename = `${cleanTitle}_${choice.resolution.quality}.${choice.resolution.format}`;
+      } catch (err) {
+        console.error(chalk.red(`\nError crawling Facebook: ${err instanceof Error ? err.message : String(err)}`));
         return;
       }
     } else {
@@ -342,6 +825,28 @@ async function main() {
 
     if (totalBytes > 0) {
       progressBar.stop();
+    }
+
+    if (audioUrlToMux) {
+      const audioPath = path.join(process.cwd(), `temp_audio_${Date.now()}.m4a`);
+      const finalMuxedPath = path.join(process.cwd(), `muxed_${filename}`);
+      
+      console.log(chalk.yellow('\nDownloading audio stream for high-res muxing...'));
+      const audioRes = await axios({ url: audioUrlToMux, method: 'GET', responseType: 'stream' });
+      const audioWriter = createWriteStream(audioPath);
+      await pipeline(audioRes.data, audioWriter);
+
+      console.log(chalk.blue('Muxing video and audio with FFmpeg...'));
+      try {
+        execSync(`ffmpeg -y -i "${outputPath}" -i "${audioPath}" -c copy -map 0:v:0 -map 1:a:0 "${finalMuxedPath}"`, { stdio: 'ignore' });
+        await fs.remove(outputPath);
+        await fs.remove(audioPath);
+        await fs.move(finalMuxedPath, outputPath);
+        console.log(chalk.green('✓ Muxing complete!'));
+      } catch (e) {
+        console.error(chalk.red('\nFFmpeg muxing failed. You may need to install FFmpeg.'));
+        console.log(chalk.yellow(`Video and audio saved separately as: ${filename} and ${path.basename(audioPath)}`));
+      }
     }
 
     console.log(chalk.green('\n✓ Download Complete!'));
