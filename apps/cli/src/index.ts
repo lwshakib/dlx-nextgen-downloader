@@ -19,6 +19,115 @@ function formatBytes(bytes: number, decimals = 2) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
+interface TikTokResolution {
+  qualityType: string | null;
+  qualityLabel: string | null;
+  bitrate: number | null;
+  codec: string | null;
+  width: number | null;
+  height: number | null;
+  url: string | null;
+}
+
+interface TikTokData {
+  title: string | null;
+  thumbnail: string | null;
+  resolutions: TikTokResolution[];
+  tokens?: {
+    msToken: string | null;
+    ttChainToken: string | null;
+  };
+}
+
+const SCRIPT_ID = "__UNIVERSAL_DATA_FOR_REHYDRATION__";
+
+function getQualityLabel(height?: number | null, qualityType?: string | null) {
+  if (height && Number.isFinite(height)) {
+    return `${height}p`;
+  }
+  if (qualityType) {
+    const match = qualityType.match(/\d{3,4}/);
+    if (match) return `${match[0]}p`;
+    return qualityType;
+  }
+  return null;
+}
+
+async function crawlTikTok(url: string): Promise<TikTokData> {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+      Referer: "https://www.tiktok.com/",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  });
+
+  if (!response.ok) throw new Error(`Failed to fetch TikTok page: ${response.status}`);
+  
+  // Extract cookies
+  let setCookies: string[] = [];
+  const anyHeaders = response.headers as any;
+  if (typeof anyHeaders.getSetCookie === "function") {
+    setCookies = anyHeaders.getSetCookie();
+  } else {
+    const single = response.headers.get("set-cookie");
+    if (single) {
+      setCookies = single.split(/,(?=[^;]+?=)/g);
+    }
+  }
+
+  const cookies: Record<string, string> = {};
+  for (const line of setCookies) {
+    const [cookiePart] = line.split(";");
+    if (!cookiePart) continue;
+    const [name, ...rest] = cookiePart.split("=");
+    const value = rest.join("=");
+    if (!name) continue;
+    cookies[name.trim()] = value.trim();
+  }
+
+  const msToken = cookies.msToken || cookies.mstoken;
+  const ttChainToken = cookies.tt_chain_token || cookies.tt_chain_token_v2;
+
+  const html = await response.text();
+
+  const regex = new RegExp(`<script[^>]+id="${SCRIPT_ID}"[^>]*>([\\s\\S]*?)<\\/script>`, "i");
+  const match = html.match(regex);
+  if (!match) throw new Error("Unable to find TikTok rehydration data.");
+
+  const parsed = JSON.parse(match[1]!.trim());
+  const defaultScope = parsed?.__DEFAULT_SCOPE__;
+  const itemStruct = defaultScope?.["webapp.video-detail"]?.itemInfo?.itemStruct;
+
+  if (!itemStruct) throw new Error("Video detail data was not found in the TikTok page.");
+
+  const video = itemStruct.video;
+  const bitrateInfo = Array.isArray(video?.bitrateInfo) ? video.bitrateInfo : [];
+
+  return {
+    title: itemStruct.desc ?? null,
+    thumbnail: video?.cover ?? null,
+    tokens: {
+      msToken: msToken ?? null,
+      ttChainToken: ttChainToken ?? null,
+    },
+    resolutions: bitrateInfo
+      .map((entry: any) => {
+        const height = entry.PlayAddr?.Height ?? null;
+        return {
+          qualityType: entry.QualityType ?? null,
+          qualityLabel: getQualityLabel(height, entry.QualityType ?? null),
+          bitrate: entry.Bitrate ?? null,
+          codec: entry.CodecType ?? null,
+          width: entry.PlayAddr?.Width ?? null,
+          height,
+          url: entry.PlayAddr?.UrlList?.[0] ?? null,
+        };
+      })
+      .filter((entry: any) => entry.url),
+  };
+}
+
 async function main() {
   // Clear the console for a clean start
   console.clear();
@@ -48,12 +157,46 @@ async function main() {
       },
     ]);
 
-    const url = answers.url;
-    
-    // Extract filename from URL
-    let filename = path.basename(new URL(url).pathname);
-    if (!filename || filename === '/') {
-      filename = 'downloaded_file_' + Date.now();
+    let url = answers.url;
+    let filename = '';
+    let tiktokTokens: { msToken: string | null; ttChainToken: string | null } | null = null;
+
+    const urlObj = new URL(url);
+    if (urlObj.hostname.includes('tiktok.com')) {
+      console.log(chalk.yellow('\nCrawling TikTok video...'));
+      try {
+        const tiktokData = await crawlTikTok(url);
+        tiktokTokens = tiktokData.tokens || null;
+        if (tiktokData.resolutions.length === 0) {
+          throw new Error('No downloadable resolutions found for this TikTok video.');
+        }
+
+        console.log(chalk.green(`\nFound: ${chalk.white(tiktokData.title || 'Untitled Video')}`));
+
+        const choice = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'resolution',
+            message: 'Select quality:',
+            choices: tiktokData.resolutions.map((res) => ({
+              name: `${res.qualityLabel || 'Unknown'} (${res.codec || 'N/A'}, ${res.bitrate ? (res.bitrate / 1000).toFixed(0) + 'kbps' : 'N/A'})`,
+              value: res
+            })),
+          },
+        ]);
+
+        url = choice.resolution.url;
+        filename = `${(tiktokData.title || 'tiktok_video').substring(0, 30).replace(/[^a-z0-9]/gi, '_')}_${choice.resolution.qualityLabel}.mp4`;
+      } catch (err) {
+        console.error(chalk.red(`\nError crawling TikTok: ${err instanceof Error ? err.message : String(err)}`));
+        return;
+      }
+    } else {
+      // Extract filename from URL for non-tiktok downloads
+      filename = path.basename(new URL(url).pathname);
+      if (!filename || filename === '/') {
+        filename = 'downloaded_file_' + Date.now();
+      }
     }
 
     const outputPath = path.join(process.cwd(), filename);
@@ -62,11 +205,27 @@ async function main() {
     console.log(chalk.yellow(`Saving to: ${chalk.white(outputPath)}`));
 
     // Start download
-    const response = await axios({
+    const axiosConfig: any = {
       url,
       method: 'GET',
       responseType: 'stream',
-    });
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      }
+    };
+
+    if (tiktokTokens) {
+      const cookieParts = [];
+      if (tiktokTokens.msToken) cookieParts.push(`msToken=${tiktokTokens.msToken}`);
+      if (tiktokTokens.ttChainToken) cookieParts.push(`tt_chain_token=${tiktokTokens.ttChainToken}`);
+      
+      if (cookieParts.length > 0) {
+        axiosConfig.headers['Cookie'] = cookieParts.join('; ');
+        axiosConfig.headers['Referer'] = 'https://www.tiktok.com/';
+      }
+    }
+
+    const response = await axios(axiosConfig);
 
     const totalLength = response.headers['content-length'];
 
