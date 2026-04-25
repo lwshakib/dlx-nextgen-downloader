@@ -5,19 +5,32 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "cli": "./dist/index.js"
+    "dlxx": "./dist/index.js"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start" : "node dist/index.js",
-    "dev" : "tsc-watch --onSuccess \"node dist/index.js\"",
-    "build" : "tsc -p ."
+    "start": "node dist/index.js",
+    "dev": "tsc-watch --onSuccess \"node dist/index.js\"",
+    "build": "tsc -p ."
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/chalk": "^2.2.4",
+    "@types/fs-extra": "^11.0.4",
+    "@types/gradient-string": "^1.1.6",
+    "@types/inquirer": "^9.0.9",
     "tsc-watch": "^7.2.0",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^25.1.0",
+    "axios": "^1.15.2",
+    "chalk": "^5.6.2",
+    "cli-progress": "^3.12.0",
+    "fs-extra": "^11.3.4",
+    "inquirer": "^13.4.2"
   }
 }
