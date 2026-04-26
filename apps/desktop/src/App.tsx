@@ -293,7 +293,7 @@ function App() {
           onSelectProject={setActiveProject}
         />
         <SidebarInset className="flex flex-col h-screen overflow-hidden">
-          <header className="drag-css flex h-10 shrink-0 items-center gap-2">
+          <header className="drag-css flex h-8 shrink-0 items-center gap-2">
             <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
               <SidebarTrigger className="-ml-1 no-drag-css" />
               <Separator
@@ -304,7 +304,7 @@ function App() {
                 <ModeToggle />
               </div>
             </div>
-            <div className="ml-auto flex items-center gap-1 px-2 no-drag-css">
+            <div className="ml-auto flex items-stretch no-drag-css h-full">
               <button
                 aria-label="Minimize window"
                 onClick={() => {
@@ -312,7 +312,7 @@ function App() {
                     window.ipcRenderer.invoke("window-minimize");
                   }
                 }}
-                className="flex size-7 cursor-pointer items-center justify-center rounded bg-background text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
+                className="flex w-12 cursor-pointer items-center justify-center bg-transparent text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <Minus className="size-3.5" />
               </button>
@@ -323,7 +323,7 @@ function App() {
                     window.ipcRenderer.invoke("window-maximize");
                   }
                 }}
-                className="flex size-7 cursor-pointer items-center justify-center rounded bg-background text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
+                className="flex w-12 cursor-pointer items-center justify-center bg-transparent text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <Square className="size-3" />
               </button>
@@ -334,7 +334,7 @@ function App() {
                     window.ipcRenderer.invoke("window-close");
                   }
                 }}
-                className="flex size-7 cursor-pointer items-center justify-center rounded bg-background text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-destructive"
+                className="flex w-12 cursor-pointer items-center justify-center bg-transparent text-muted-foreground transition hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive"
               >
                 <X className="size-4" />
               </button>
