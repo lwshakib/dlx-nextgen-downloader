@@ -5,8 +5,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@workspace/ui/components/sidebar";
+import { ChevronsUpDown, Plus } from "lucide-react";
 import * as React from "react";
-import { Logo } from "@workspace/ui/components/logo";
 
 export function TeamSwitcher({
   teams,
@@ -28,14 +28,11 @@ export function TeamSwitcher({
       <SidebarMenuItem>
         <SidebarMenuButton
           size="lg"
-          className="hover:bg-transparent active:bg-transparent focus-visible:ring-0"
+          className="hover:bg-transparent active:bg-transparent focus-visible:ring-0 h-fit py-2"
         >
-          <div className="flex aspect-square size-8 items-center justify-center rounded-lg">
-            <Logo className="size-8" />
-          </div>
-          <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-medium">Flux</span>
-            <span className="truncate text-xs">Video downloader</span>
+          <img src="/logo.svg" className="size-8 block shrink-0" alt="Logo" />
+          <div className="flex flex-1 items-center text-left text-sm leading-tight">
+            <span className="truncate font-semibold">DLX NextGen Downloader</span>
           </div>
         </SidebarMenuButton>
       </SidebarMenuItem>

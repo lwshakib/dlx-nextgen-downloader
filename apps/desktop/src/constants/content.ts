@@ -1,5 +1,5 @@
 export const contentMap: Record<string, string> = {
-  home: "Welcome to Flux Video Downloader. Choose a platform to get started.",
+  home: "Welcome to DLX Video Downloader. Choose a platform to get started.",
   youtube: "Download videos from YouTube with a single click.",
   facebook: "Fetch public Facebook videos quickly.",
   "facebook-private-video":
