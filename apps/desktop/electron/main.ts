@@ -2376,6 +2376,16 @@ function createTray() {
 }
 
 app.whenReady().then(async () => {
+  // Set app to start on login in production
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      // Windows specific settings
+      path: process.execPath,
+      args: ["--hidden"],
+    });
+  }
+
   // Verify required dependencies before starting
   const depsOk = await verifyDependencies();
   if (!depsOk) {
