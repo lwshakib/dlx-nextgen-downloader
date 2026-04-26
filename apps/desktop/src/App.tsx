@@ -334,9 +334,9 @@ function App() {
                     window.ipcRenderer.invoke("window-close");
                   }
                 }}
-                className="flex w-12 cursor-pointer items-center justify-center bg-transparent text-muted-foreground transition hover:bg-destructive hover:text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive"
+                className="flex w-12 cursor-pointer items-center justify-center bg-transparent text-muted-foreground transition-colors hover:bg-[#e81123] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive"
               >
-                <X className="size-4" />
+                <X className="size-4 stroke-[2.5px]" />
               </button>
             </div>
           </header>
