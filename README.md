@@ -1,3 +1,5 @@
+<img src="./apps/web/public/logo.svg" alt="DLX NextGen Logo" width="60">
+
 # DLX NextGen Downloader
 
 DLX NextGen Downloader is a comprehensive suite of applications designed for high-performance video downloading from popular platforms such as YouTube, TikTok, and Facebook. 
