@@ -292,7 +292,7 @@ function App() {
           onSelectProject={setActiveProject}
         />
         <SidebarInset className="flex flex-col h-screen overflow-hidden">
-          <header className="drag-css flex h-16 shrink-0 items-center gap-2">
+          <header className="drag-css flex h-10 shrink-0 items-center gap-2">
             <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
               <SidebarTrigger className="-ml-1 no-drag-css" />
               <Separator
@@ -340,8 +340,8 @@ function App() {
             </div>
           </header>
           <ScrollArea className="flex-1 min-h-0">
-            <div className="flex flex-col gap-3 sm:gap-4 p-3 sm:p-4 pt-0 min-w-0">
-              <div className="bg-muted/50 rounded-lg sm:rounded-xl p-4 sm:p-6 overflow-hidden min-w-0">
+            <div className="flex flex-col gap-2 sm:gap-3 p-2 sm:p-3 pt-0 min-w-0">
+              <div className="bg-muted/50 rounded-lg sm:rounded-xl p-3 sm:p-4 overflow-hidden min-w-0">
                 <h2 className="text-xl sm:text-2xl font-semibold capitalize">
                   {activeProject.replace(/-/g, " ")}
                 </h2>
