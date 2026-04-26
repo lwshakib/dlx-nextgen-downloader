@@ -256,6 +256,16 @@ export async function crawlYouTube(videoId: string) {
   if (!streamingData) {
     const clients = [
       {
+        name: "ANDROID",
+        version: "20.10.38",
+        userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
+      },
+      {
+        name: "IOS",
+        version: "21.02.35",
+        userAgent: "com.google.ios.youtube/21.02.35 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)",
+      },
+      {
         name: "WEB_EMBEDDED_PLAYER",
         version: "1.20240101.01.01",
         userAgent: browserUserAgent,

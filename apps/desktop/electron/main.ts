@@ -577,7 +577,6 @@ const BASE_HEADERS = {
   Accept: "*/*",
   "Accept-Language": "en-US,en;q=0.9",
   Connection: "keep-alive",
-  Referer: "https://www.tiktok.com/",
 };
 
 function buildCookieHeader(
@@ -693,6 +692,10 @@ async function fetchWithRedirects(
   const headers = new Headers({
     ...BASE_HEADERS,
     Host: parsed.hostname,
+    Referer: parsed.origin + "/",
+    Origin: parsed.origin,
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
   });
 
   const response = await fetch(url, {
@@ -730,6 +733,10 @@ async function checkRangeSupport(url: string): Promise<boolean> {
       ...BASE_HEADERS,
       Host: parsed.hostname,
       Range: "bytes=0-0", // Request first byte only
+      Referer: parsed.origin + "/",
+      Origin: parsed.origin,
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "cross-site",
     });
 
     const response = await fetch(url, {
@@ -787,6 +794,10 @@ async function downloadRange(
     ...BASE_HEADERS,
     Host: parsed.hostname,
     Range: `bytes=${start}-${end}`,
+    Referer: parsed.origin + "/",
+    Origin: parsed.origin,
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
   });
 
   let response = await fetch(url, {
@@ -1083,7 +1094,35 @@ ipcMain.handle(
         console.log(`Using fetch-based download for ${downloadType} video`);
 
         // For YouTube, we don't need cookies, but we need to handle redirects
-        // For TikTok, we need cookies
+        // NEW: Re-fetch YouTube URLs to get unthrottled links using InnerTube logic
+        if (isYouTube) {
+          console.log("Re-fetching unthrottled YouTube URLs via InnerTube API...");
+          try {
+            const videoIdMatch = payload.url.match(/(?:v=|\/|embed\/|shorts\/|youtu\.be\/)([\w-]{11})/);
+            const videoId = videoIdMatch ? videoIdMatch[1] : null;
+            
+            if (videoId) {
+              const ytData = await crawlYouTube(videoId);
+              // Extract the quality label from the payload if possible (e.g., from filename or title)
+              // For now, just pick the best resolution or the one that matches our current URL's quality
+              const bestRes = ytData.resolutions[0];
+              if (bestRes && bestRes.url) {
+                console.log(`Found fresh unthrottled URL for quality: ${bestRes.qualityLabel}`);
+                payload.url = bestRes.url;
+                
+                // Also update audio URL for muxing
+                const freshAudioUrl = await getBestYouTubeAudio(videoId, ytData.apiKey, ytData.visitorData);
+                if (freshAudioUrl) {
+                  console.log("Found fresh audio URL for muxing");
+                  payload.audioUrl = freshAudioUrl;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to re-fetch unthrottled YouTube URLs, proceeding with original URLs:", e);
+          }
+        }
+
         let cookieHeader = "";
         if (isTikTokDownload && payload.cookies) {
           cookieHeader = buildCookieHeader(
@@ -2230,10 +2269,10 @@ function createExtensionServer() {
           const { url } = JSON.parse(body);
           const result = await crawlTikTok(url);
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result));
+          res.end(JSON.stringify({ status: "ok", ...result }));
         } catch (error) {
           res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: (error as Error).message }));
+          res.end(JSON.stringify({ status: "error", error: (error as Error).message }));
         }
       });
     } else if (req.method === "POST" && req.url === "/crawl/youtube") {
@@ -2244,10 +2283,10 @@ function createExtensionServer() {
           const { url } = JSON.parse(body);
           const result = await crawlYouTube(url);
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result));
+          res.end(JSON.stringify({ status: "ok", ...result }));
         } catch (error) {
           res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: (error as Error).message }));
+          res.end(JSON.stringify({ status: "error", error: (error as Error).message }));
         }
       });
     } else if (req.method === "POST" && req.url === "/crawl/facebook") {
@@ -2258,10 +2297,10 @@ function createExtensionServer() {
           const { url } = JSON.parse(body);
           const result = await crawlFacebook(url);
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result));
+          res.end(JSON.stringify({ status: "ok", ...result }));
         } catch (error) {
           res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: (error as Error).message }));
+          res.end(JSON.stringify({ status: "error", error: (error as Error).message }));
         }
       });
     } else {

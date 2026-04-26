@@ -1,6 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
+function formatBytes(bytes: number, decimals = 2) {
+  if (bytes === 0) return "0 Bytes";
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+}
+
+function getQualityLabel(height?: number | null, qualityType?: string | null) {
+  if (height && Number.isFinite(height)) {
+    return `${height}p`;
+  }
+  if (qualityType) {
+    const match = qualityType.match(/\d{3,4}/);
+    if (match) return `${match[0]}p`;
+    return qualityType;
+  }
+  return null;
+}
+
 // Store mapping of blob URLs to original video sources
 const blobUrlToSource = new Map<string, string>();
 
@@ -53,6 +74,7 @@ interface FacebookResolution {
 }
 
 interface FacebookData {
+  status?: string;
   title: string;
   thumbnail: string;
   resolutions: FacebookResolution[];
@@ -69,6 +91,7 @@ interface TikTokResolution {
 }
 
 interface TikTokData {
+  status?: string;
   title: string;
   thumbnail: string;
   resolutions: TikTokResolution[];
@@ -389,36 +412,186 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
   };
 
   const fetchYouTubeData = async (videoUrl: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL || "http://127.0.0.1:8765";
-
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await fetch(`${apiUrl}/crawl/youtube`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: videoUrl }),
-      });
+      // 1. Get Video ID from URL
+      const videoIdMatch = videoUrl.match(/(?:v=|\/|embed\/|shorts\/|youtu\.be\/)([\w-]{11})/);
+      const videoId = videoIdMatch ? videoIdMatch[1] : null;
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData?.error || `HTTP error! status: ${response.status}`
-        );
+      if (!videoId) {
+        throw new Error("Invalid YouTube URL");
       }
 
-      const data: YouTubeData = await response.json();
-      if (data.status === "ok") {
-        setYoutubeData(data);
-        setFacebookData(null);
-        setTikTokData(null);
-        setShowDropdown(true);
+      // 2. Extract API Key and Visitor Data from the page
+      const html = document.documentElement.innerHTML;
+      const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+      const apiKey = apiKeyMatch ? apiKeyMatch[1] : null;
+
+      const visitorDataMatch = html.match(/"visitorData":"([^"]+)"/);
+      const visitorData = visitorDataMatch ? visitorDataMatch[1] : null;
+
+      if (!apiKey) {
+        console.warn("INNERTUBE_API_KEY not found on page, falling back to script tag parsing");
       } else {
-        throw new Error("Failed to fetch video data");
+        try {
+          console.log("Fetching YouTube data via InnerTube API (Android client)...");
+          // Use the Android client to get better streaming URLs (often unthrottled)
+          const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              context: {
+                client: {
+                  clientName: "ANDROID",
+                  clientVersion: "20.10.38",
+                  visitorData: visitorData
+                }
+              },
+              videoId
+            })
+          });
+
+          if (!response.ok) throw new Error(`API error: ${response.status}`);
+          
+          const playerData = await response.json();
+          
+          if (playerData.playabilityStatus?.status === 'ERROR') {
+            throw new Error(`Video unplayable: ${playerData.playabilityStatus.reason}`);
+          }
+
+          if (playerData.streamingData) {
+            const videoDetails = playerData.videoDetails;
+            const streamingData = playerData.streamingData;
+            const title = videoDetails?.title || "YouTube Video";
+            const thumbnail = videoDetails?.thumbnail?.thumbnails?.pop()?.url || "";
+            const resolutions: any[] = [];
+
+            const allFormats = [
+              ...(streamingData.formats || []),
+              ...(streamingData.adaptiveFormats || []),
+            ];
+
+            allFormats.forEach((f: any) => {
+              if (f.url || f.signatureCipher || f.cipher) {
+                const isVideo = f.mimeType?.includes("video/");
+                if (isVideo) {
+                  resolutions.push({
+                    url: f.url || "", // If signatureCipher is present, it still needs handling but Android often gives direct URLs
+                    qualityLabel: f.qualityLabel || (f.height ? `${f.height}p` : "Unknown"),
+                    bitrate: f.bitrate,
+                    mimeType: f.mimeType,
+                    width: f.width,
+                    height: f.height,
+                  });
+                }
+              }
+            });
+
+            if (resolutions.length > 0) {
+              setYoutubeData({
+                status: "ok",
+                videoId: videoId,
+                title,
+                thumbnail,
+                resolutions: resolutions.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)),
+                audio: {
+                  url: streamingData.adaptiveFormats
+                    ?.filter((f: any) => f.mimeType?.includes("audio/"))
+                    ?.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0]?.url || "",
+                  mimeType: "audio/mp4",
+                },
+              });
+              setFacebookData(null);
+              setTikTokData(null);
+              setShowDropdown(true);
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (apiErr) {
+          console.warn("InnerTube API fetch failed:", apiErr);
+          // Fallback to script tag parsing
+        }
       }
+
+      // 3. Fallback: Local scraping from script tags
+      const scripts = Array.from(document.getElementsByTagName("script"));
+      let playerResponse: any = null;
+
+      for (const script of scripts) {
+        const content = script.textContent || "";
+        if (content.includes("ytInitialPlayerResponse = {")) {
+          try {
+            const startIdx = content.indexOf("ytInitialPlayerResponse = {") + "ytInitialPlayerResponse = ".length;
+            let endIdx = content.indexOf("};", startIdx);
+            if (endIdx === -1) endIdx = content.lastIndexOf("}");
+            else endIdx += 1;
+
+            if (startIdx > -1 && endIdx > -1) {
+              const jsonStr = content.substring(startIdx, endIdx);
+              playerResponse = JSON.parse(jsonStr);
+              break;
+            }
+          } catch (e) {
+            console.warn("Failed to parse local YouTube player response:", e);
+          }
+        }
+      }
+
+      if (playerResponse && playerResponse.streamingData) {
+        // ... (existing logic for parsing playerResponse if API failed)
+        const videoDetails = playerResponse.videoDetails;
+        const streamingData = playerResponse.streamingData;
+        const title = videoDetails?.title || "YouTube Video";
+        const thumbnail = videoDetails?.thumbnail?.thumbnails?.pop()?.url || "";
+        const resolutions: any[] = [];
+
+        const allFormats = [
+          ...(streamingData.formats || []),
+          ...(streamingData.adaptiveFormats || []),
+        ];
+
+        allFormats.forEach((f: any) => {
+          if (f.url || f.signatureCipher || f.cipher) {
+            const isVideo = f.mimeType?.includes("video/");
+            if (isVideo) {
+              resolutions.push({
+                url: f.url || "",
+                qualityLabel: f.qualityLabel || (f.height ? `${f.height}p` : "Unknown"),
+                bitrate: f.bitrate,
+                mimeType: f.mimeType,
+                width: f.width,
+                height: f.height,
+              });
+            }
+          }
+        });
+
+        if (resolutions.length > 0) {
+          setYoutubeData({
+            status: "ok",
+            videoId: videoId || videoDetails?.videoId || "",
+            title,
+            thumbnail,
+            resolutions: resolutions.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)),
+            audio: {
+              url: streamingData.adaptiveFormats
+                ?.filter((f: any) => f.mimeType?.includes("audio/"))
+                ?.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0]?.url || "",
+              mimeType: "audio/mp4",
+            },
+          });
+          setFacebookData(null);
+          setTikTokData(null);
+          setShowDropdown(true);
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      throw new Error("Could not find video qualities on the page. Please try refreshing or ensure you are on a video page.");
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to fetch video data";
@@ -430,35 +603,69 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
   };
 
   const fetchFacebookData = async (videoUrl: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL || "http://127.0.0.1:8765";
-
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await fetch(`${apiUrl}/crawl/facebook`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: videoUrl }),
-      });
+      // 1. Try local scraping from page source
+      const html = document.documentElement.innerHTML;
+      
+      // Extract video ID
+      const videoIdMatch = html.match(/"video_id":"(\d+)"/) || videoUrl.match(/\/videos\/(\d+)/) || videoUrl.match(/v=(\d+)/);
+      const videoId = videoIdMatch ? videoIdMatch[1] : null;
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData?.error || `HTTP error! status: ${response.status}`
-        );
+      // Extract title
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/);
+      const title = titleMatch ? titleMatch[1].replace(" | Facebook", "") : "Facebook Video";
+
+      // Extract thumbnail
+      const thumbnailMatch = html.match(/"preferred_thumbnail":{"image":{"uri":"([^"]+)"/) || html.match(/"thumbnailUrl":"([^"]+)"/);
+      const thumbnail = thumbnailMatch ? thumbnailMatch[1].replace(/\\/g, "") : "";
+
+      const resolutions: any[] = [];
+
+      // Extract HD/SD source URLs
+      // Facebook often uses these keys in its JSON-like strings in scripts
+      const hdMatch = html.match(/"browser_native_hd_url":"([^"]+)"/) || html.match(/"playable_url_quality_hd":"([^"]+)"/);
+      const sdMatch = html.match(/"browser_native_sd_url":"([^"]+)"/) || html.match(/"playable_url":"([^"]+)"/);
+
+      if (hdMatch) {
+        resolutions.push({
+          url: hdMatch[1].replace(/\\/g, ""),
+          quality: "HD",
+          width: 1280,
+          height: 720,
+          format: "mp4"
+        });
       }
 
-      const data: FacebookData = await response.json();
-      setFacebookData(data);
-      setYoutubeData(null);
-      setTikTokData(null);
-      setShowDropdown(true);
+      if (sdMatch) {
+        resolutions.push({
+          url: sdMatch[1].replace(/\\/g, ""),
+          quality: "SD",
+          width: 640,
+          height: 360,
+          format: "mp4"
+        });
+      }
+
+      if (resolutions.length > 0) {
+        setFacebookData({
+          title,
+          thumbnail,
+          resolutions
+        });
+        setYoutubeData(null);
+        setTikTokData(null);
+        setShowDropdown(true);
+        setIsLoading(false);
+        return;
+      }
+
+      throw new Error("Could not find Facebook video sources on this page. If this is a private video, please use the 'Facebook Private Video' tab.");
     } catch (err) {
       const errorMessage =
-        err instanceof Error ? err.message : "Failed to fetch video data";
+        err instanceof Error ? err.message : "Failed to fetch Facebook data";
       setError(errorMessage);
       console.error("Error fetching Facebook data:", err);
     } finally {
@@ -467,32 +674,77 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
   };
 
   const fetchTikTokData = async (videoUrl: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL || "http://127.0.0.1:8765";
-
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await fetch(`${apiUrl}/crawl/tiktok`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: videoUrl }),
-      });
+      // 1. Try local scraping from script tags
+      const scriptElement = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__");
+      if (scriptElement && scriptElement.textContent) {
+        try {
+          const parsed = JSON.parse(scriptElement.textContent.trim());
+          const defaultScope = parsed.__DEFAULT_SCOPE__;
+          const itemStruct = defaultScope?.["webapp.video-detail"]?.itemInfo?.itemStruct;
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData?.error || `HTTP error! status: ${response.status}`
-        );
+          if (itemStruct) {
+            const video = itemStruct.video;
+            const bitrateInfo = Array.isArray(video?.bitrateInfo)
+              ? video.bitrateInfo
+              : Array.isArray(video?.bitrate_info)
+              ? video.bitrate_info
+              : [];
+
+            const resolutions = bitrateInfo
+              .map((entry: any) => {
+                const playAddr = entry.PlayAddr || entry.play_addr || entry.playAddr;
+                const height = playAddr?.Height || playAddr?.height || null;
+                const width = playAddr?.Width || playAddr?.width || null;
+                const bitrate = entry.Bitrate || entry.bitrate || null;
+                const codec = entry.CodecType || entry.codec_type || entry.codec || null;
+                const url = playAddr?.UrlList?.[0] || playAddr?.url_list?.[0] || playAddr?.url || null;
+
+                let qualityLabel = null;
+                if (entry.GearName || entry.gear_name) {
+                  const m = (entry.GearName || entry.gear_name).match(/(\d{3,4})/);
+                  if (m) qualityLabel = `${m[1]}p`;
+                }
+                if (!qualityLabel)
+                  qualityLabel = getQualityLabel(height, entry.QualityType || entry.quality_type || null);
+
+                return {
+                  qualityType: entry.QualityType || entry.quality_type || null,
+                  qualityLabel,
+                  bitrate,
+                  codec,
+                  width,
+                  height,
+                  url,
+                };
+              })
+              .filter((entry: any) => entry.url)
+              .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+
+            if (resolutions.length > 0) {
+              setTikTokData({
+                status: "ok",
+                title: itemStruct.desc ?? "TikTok Video",
+                thumbnail: video?.cover ?? "",
+                resolutions,
+                tokens: null, // Tokens can be extracted from cookies if needed
+              });
+              setYoutubeData(null);
+              setFacebookData(null);
+              setShowDropdown(true);
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to parse local TikTok data:", e);
+        }
       }
 
-      const data: TikTokData = await response.json();
-      setTikTokData(data);
-      setYoutubeData(null);
-      setFacebookData(null);
-      setShowDropdown(true);
+      throw new Error("Could not find video qualities on the page. Please try refreshing or ensure you are on a video page.");
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to fetch video data";
