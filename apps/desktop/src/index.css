@@ -1,1 +1,26 @@
-@import "tailwindcss";
+@import "@workspace/ui/globals.css";
+
+@layer utilities {
+  .drag-css {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag-css {
+    -webkit-app-region: no-drag;
+  }
+
+  /* Disable text selection globally for desktop app */
+  .select-none,
+  .select-none * {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+
+  .wrap-break-word {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+}
