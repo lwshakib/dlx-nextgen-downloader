@@ -362,70 +362,70 @@ function App() {
             </div>
           </header>
           <ScrollArea className="flex-1 min-h-0">
-            <div className="flex flex-col gap-2 sm:gap-3 p-2 sm:p-3 pt-0 min-w-0">
-              <div className="bg-muted/50 rounded-lg sm:rounded-xl p-3 sm:p-4 overflow-hidden min-w-0">
-                <h2 className="text-xl sm:text-2xl font-semibold capitalize">
-                  {activeProject.replace(/-/g, " ")}
-                </h2>
-                <p className="mt-2 text-sm sm:text-base text-muted-foreground">
+            <div className="flex flex-col gap-4 p-4 sm:p-6 min-w-0">
+              <h2 className="text-xl sm:text-2xl font-semibold capitalize">
+                {activeProject.replace(/-/g, " ")}
+              </h2>
+              {content && (
+                <p className="text-sm sm:text-base text-muted-foreground">
                   {content}
                 </p>
-                {hasCrawler && (
-                  <>
-                    {activeProject === "facebook-private-video" ? (
-                      <FacebookPrivateVideo
-                        pageSource={pageSource}
-                        onPageSourceChange={setPageSource}
-                        onAnalyze={handleAnalyzePageSource}
-                        isLoading={isCrawling}
-                        error={crawlError}
-                      />
-                    ) : (
-                      <CrawlerPage
-                        searchValue={searchValue}
-                        onSearchValueChange={setSearchValue}
-                        onCrawl={handleCrawl}
-                      />
-                    )}
-                    {crawlError && activeProject !== "facebook-private-video" && (
-                      <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md overflow-hidden">
-                        <p className="text-xs sm:text-sm text-destructive break-words">
-                          {crawlError}
-                        </p>
-                      </div>
-                    )}
-                    {activeProject === "youtube" && (
-                      <YoutubeResults
-                        data={crawlData as YoutubeCrawlResult | null}
-                        isLoading={isCrawling}
-                        onDownload={handleDownload}
-                      />
-                    )}
-                    {(activeProject === "facebook" ||
-                      activeProject === "facebook-private-video") && (
-                      <FacebookResults
-                        data={crawlData as FacebookCrawlResult | null}
-                        isLoading={isCrawling}
-                        onDownload={handleDownload}
-                      />
-                    )}
-                    {activeProject === "tiktok" && (
-                      <TikTokResults
-                        data={crawlData as TikTokCrawlResult | null}
-                        isLoading={isCrawling}
-                        onDownload={handleDownload}
-                      />
-                    )}
-                  </>
-                )}
-                {isHome && <HomePage />}
-                {isSettings && (
-                  <SettingsPage
-                    settings={settings}
-                    onSettingsChange={handleSettingsChange}
-                  />
-                )}
-              </div>
+              )}
+              {hasCrawler && (
+                <div className="mt-2">
+                  {activeProject === "facebook-private-video" ? (
+                    <FacebookPrivateVideo
+                      pageSource={pageSource}
+                      onPageSourceChange={setPageSource}
+                      onAnalyze={handleAnalyzePageSource}
+                      isLoading={isCrawling}
+                      error={crawlError}
+                    />
+                  ) : (
+                    <CrawlerPage
+                      searchValue={searchValue}
+                      onSearchValueChange={setSearchValue}
+                      onCrawl={handleCrawl}
+                    />
+                  )}
+                  {crawlError && activeProject !== "facebook-private-video" && (
+                    <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md overflow-hidden">
+                      <p className="text-xs sm:text-sm text-destructive break-words">
+                        {crawlError}
+                      </p>
+                    </div>
+                  )}
+                  {activeProject === "youtube" && (
+                    <YoutubeResults
+                      data={crawlData as YoutubeCrawlResult | null}
+                      isLoading={isCrawling}
+                      onDownload={handleDownload}
+                    />
+                  )}
+                  {(activeProject === "facebook" ||
+                    activeProject === "facebook-private-video") && (
+                    <FacebookResults
+                      data={crawlData as FacebookCrawlResult | null}
+                      isLoading={isCrawling}
+                      onDownload={handleDownload}
+                    />
+                  )}
+                  {activeProject === "tiktok" && (
+                    <TikTokResults
+                      data={crawlData as TikTokCrawlResult | null}
+                      isLoading={isCrawling}
+                      onDownload={handleDownload}
+                    />
+                  )}
+                </div>
+              )}
+              {isHome && <HomePage />}
+              {isSettings && (
+                <SettingsPage
+                  settings={settings}
+                  onSettingsChange={handleSettingsChange}
+                />
+              )}
             </div>
           </ScrollArea>
         </SidebarInset>

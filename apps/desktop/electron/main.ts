@@ -274,9 +274,9 @@ function createWindow() {
   });
 
   // Open DevTools only in development mode
-  if (VITE_DEV_SERVER_URL) {
-    win.webContents.openDevTools();
-  }
+  // if (VITE_DEV_SERVER_URL) {
+  //   win.webContents.openDevTools();
+  // }
 
   win.on("ready-to-show", () => {
     win?.show();
@@ -471,9 +471,9 @@ function createDownloaderWindow(payload: {
   });
 
   // Open DevTools only in development mode
-  if (VITE_DEV_SERVER_URL) {
-    newDownloaderWindow.webContents.openDevTools();
-  }
+  // if (VITE_DEV_SERVER_URL) {
+  //   newDownloaderWindow.webContents.openDevTools();
+  // }
 
   // Store payload to send after page loads
   const downloadPayload = {
