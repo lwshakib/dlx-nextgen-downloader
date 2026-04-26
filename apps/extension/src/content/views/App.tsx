@@ -389,11 +389,7 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
   };
 
   const fetchYouTubeData = async (videoUrl: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL;
-    if (!apiUrl) {
-      setError("VITE_WEB_API_URL is not configured");
-      return;
-    }
+    const apiUrl = import.meta.env.VITE_WEB_API_URL || "http://127.0.0.1:8765";
 
     setIsLoading(true);
     setError(null);
@@ -434,11 +430,7 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
   };
 
   const fetchFacebookData = async (videoUrl: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL;
-    if (!apiUrl) {
-      setError("VITE_WEB_API_URL is not configured");
-      return;
-    }
+    const apiUrl = import.meta.env.VITE_WEB_API_URL || "http://127.0.0.1:8765";
 
     setIsLoading(true);
     setError(null);
@@ -475,11 +467,7 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
   };
 
   const fetchTikTokData = async (videoUrl: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL;
-    if (!apiUrl) {
-      setError("VITE_WEB_API_URL is not configured");
-      return;
-    }
+    const apiUrl = import.meta.env.VITE_WEB_API_URL || "http://127.0.0.1:8765";
 
     setIsLoading(true);
     setError(null);

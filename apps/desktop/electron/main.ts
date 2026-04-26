@@ -2208,41 +2208,60 @@ function createExtensionServer() {
 
     if (req.method === "POST" && req.url === "/download") {
       let body = "";
-
-      req.on("data", (chunk) => {
-        body += chunk.toString();
-      });
-
+      req.on("data", (chunk) => { body += chunk.toString(); });
       req.on("end", () => {
         try {
-          const data = JSON.parse(body) as {
-            url: string;
-            title?: string | null;
-            filename?: string | null; // Full filename with extension from Chrome
-            audioUrl?: string | null;
-            cookies?: {
-              msToken?: string | null;
-              ttChainToken?: string | null;
-            } | null;
-          };
-
+          const data = JSON.parse(body);
           console.log("Received download request from extension:", data.url);
-          if (data.audioUrl) {
-            console.log(
-              "Audio URL provided:",
-              data.audioUrl.substring(0, 100) + "..."
-            );
-          }
-
-          // Ensure downloader window is created/opened
           createDownloaderWindow(data);
-
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true }));
         } catch (error) {
           console.error("Error processing extension request:", error);
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: false, error: "Invalid request" }));
+        }
+      });
+    } else if (req.method === "POST" && req.url === "/crawl/tiktok") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk.toString(); });
+      req.on("end", async () => {
+        try {
+          const { url } = JSON.parse(body);
+          const result = await crawlTikTok(url);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: (error as Error).message }));
+        }
+      });
+    } else if (req.method === "POST" && req.url === "/crawl/youtube") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk.toString(); });
+      req.on("end", async () => {
+        try {
+          const { url } = JSON.parse(body);
+          const result = await crawlYouTube(url);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: (error as Error).message }));
+        }
+      });
+    } else if (req.method === "POST" && req.url === "/crawl/facebook") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk.toString(); });
+      req.on("end", async () => {
+        try {
+          const { url } = JSON.parse(body);
+          const result = await crawlFacebook(url);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: (error as Error).message }));
         }
       });
     } else {
@@ -2260,12 +2279,9 @@ function createExtensionServer() {
   server.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EADDRINUSE") {
       console.log(
-        `Port ${EXTENSION_SERVER_PORT} is already in use. Trying to reuse existing server.`
+        `Port ${EXTENSION_SERVER_PORT} is already in use. Assuming another instance is handling requests.`
       );
-      // Try to find and reuse the existing server
-      setTimeout(() => {
-        createExtensionServer();
-      }, 1000);
+      // Stop trying to recreate the server if the port is in use, to avoid infinite loop
     } else {
       console.error("Extension server error:", error);
       // Retry after a delay
