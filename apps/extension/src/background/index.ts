@@ -165,13 +165,6 @@ chrome.downloads.onDeterminingFilename.addListener(
         console.error(
           "Cannot send blob URL to desktop app - original source not found"
         );
-        chrome.notifications.create({
-          type: "basic",
-          iconUrl: chrome.runtime.getURL("public/icons/icon48.png"),
-          title: "DLX Downloader",
-          message:
-            "Cannot download blob URL. Please try downloading the file directly.",
-        });
       }
     } catch (error) {
       console.error("Error intercepting download:", error);
@@ -305,13 +298,6 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       console.error(
         "Cannot send blob URL to desktop app - original source not found"
       );
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: chrome.runtime.getURL("public/icons/icon48.png"),
-        title: "DLX Downloader",
-        message:
-          "Cannot download blob URL. Please try downloading the file directly.",
-      });
     }
   } catch (error) {
     console.error("Error intercepting download:", error);
@@ -399,14 +385,6 @@ async function sendToDesktopApp(
           "attempts:",
           error
         );
-        // Show notification to user only on final failure
-        chrome.notifications.create({
-          type: "basic",
-          iconUrl: chrome.runtime.getURL("public/icons/icon48.png"),
-          title: "DLX Downloader",
-          message:
-            "Could not connect to desktop app. Make sure DLX NextGen Downloader is running and try again.",
-        });
       } else {
         console.log(`Attempt ${attempt} failed, retrying in 1 second...`);
         // Wait before retrying
