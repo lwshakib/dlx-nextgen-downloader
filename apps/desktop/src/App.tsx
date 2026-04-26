@@ -111,17 +111,38 @@ function App() {
   const isSettings = activeProject === "settings";
 
   const handleCrawl = async (url: string) => {
-    const apiUrl = import.meta.env.VITE_WEB_API_URL;
-    if (!apiUrl) {
-      setCrawlError("VITE_WEB_API_URL is not defined");
-      return;
-    }
-
     setIsCrawling(true);
     setCrawlError(null);
     setCrawlData(null);
 
     try {
+      let data: any = null;
+
+      // Try standalone IPC crawling first if available
+      if (window?.ipcRenderer) {
+        if (activeProject === "youtube") {
+          const videoId = url.match(/([\w-]{11})/)?.[1];
+          if (videoId) {
+            data = await window.ipcRenderer.invoke("crawl-youtube", videoId);
+          }
+        } else if (activeProject === "facebook") {
+          data = await window.ipcRenderer.invoke("crawl-facebook", url);
+        } else if (activeProject === "tiktok") {
+          data = await window.ipcRenderer.invoke("crawl-tiktok", url);
+        }
+
+        if (data) {
+          setCrawlData(data);
+          return;
+        }
+      }
+
+      // Fallback to Web API if IPC fails or is not available
+      const apiUrl = import.meta.env.VITE_WEB_API_URL;
+      if (!apiUrl) {
+        throw new Error("Local scraper failed and VITE_WEB_API_URL is not defined");
+      }
+
       let endpoint = "";
       let body: { url?: string; html?: string } = {};
 
@@ -156,7 +177,7 @@ function App() {
         );
       }
 
-      const data = await response.json();
+      data = await response.json();
       setCrawlData(data);
     } catch (error) {
       const errorMessage =

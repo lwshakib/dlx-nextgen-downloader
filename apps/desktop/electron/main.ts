@@ -18,6 +18,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // const require = createRequire(import.meta.url)
+import {
+  crawlFacebook,
+  crawlTikTok,
+  crawlYouTube,
+  getBestYouTubeAudio,
+} from "./scrapers";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // The built directory structure
@@ -368,6 +375,26 @@ ipcMain.handle("window-close", (_event) => {
   }
   return true;
 });
+
+// Crawling handlers
+ipcMain.handle("crawl-tiktok", async (_event, url: string) => {
+  return await crawlTikTok(url);
+});
+
+ipcMain.handle("crawl-youtube", async (_event, videoId: string) => {
+  return await crawlYouTube(videoId);
+});
+
+ipcMain.handle("crawl-facebook", async (_event, url: string) => {
+  return await crawlFacebook(url);
+});
+
+ipcMain.handle(
+  "get-youtube-audio",
+  async (_event, { videoId, apiKey, visitorData }) => {
+    return await getBestYouTubeAudio(videoId, apiKey, visitorData);
+  }
+);
 
 // Handle request for pending download data
 ipcMain.handle("get-pending-download", () => {
