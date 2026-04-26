@@ -4,6 +4,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ModeToggle } from "@/components/mode-toggle";
 import { ScrollArea } from "@workspace/ui/components/scroll-area";
 import { Separator } from "@workspace/ui/components/separator";
+import { Minus, Square, X } from "lucide-react";
 import {
   SidebarInset,
   SidebarProvider,
@@ -297,13 +298,13 @@ function App() {
               <SidebarTrigger className="-ml-1 no-drag-css" />
               <Separator
                 orientation="vertical"
-                className="mr-1 sm:mr-2 data-[orientation=vertical]:h-4"
+                className="my-2 data-[orientation=vertical]:h-4"
               />
               <div className="no-drag-css">
                 <ModeToggle />
               </div>
             </div>
-            <div className="ml-auto flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
+            <div className="ml-auto flex items-center gap-1 px-2 no-drag-css">
               <button
                 aria-label="Minimize window"
                 onClick={() => {
@@ -311,9 +312,9 @@ function App() {
                     window.ipcRenderer.invoke("window-minimize");
                   }
                 }}
-                className="no-drag-css flex size-7 sm:size-8 cursor-pointer items-center justify-center rounded bg-background text-sm font-semibold text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
+                className="flex size-7 cursor-pointer items-center justify-center rounded bg-background text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
               >
-                —
+                <Minus className="size-3.5" />
               </button>
               <button
                 aria-label="Maximize window"
@@ -322,9 +323,9 @@ function App() {
                     window.ipcRenderer.invoke("window-maximize");
                   }
                 }}
-                className="no-drag-css flex size-7 sm:size-8 cursor-pointer items-center justify-center rounded bg-background text-sm font-semibold text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
+                className="flex size-7 cursor-pointer items-center justify-center rounded bg-background text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ring"
               >
-                ☐
+                <Square className="size-3" />
               </button>
               <button
                 aria-label="Close window"
@@ -333,9 +334,9 @@ function App() {
                     window.ipcRenderer.invoke("window-close");
                   }
                 }}
-                className="no-drag-css flex size-8 sm:size-9 cursor-pointer items-center justify-center rounded bg-background text-lg sm:text-xl font-semibold text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-destructive"
+                className="flex size-7 cursor-pointer items-center justify-center rounded bg-background text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-destructive"
               >
-                ×
+                <X className="size-4" />
               </button>
             </div>
           </header>

@@ -25,8 +25,8 @@ export function ModeToggle() {
 
   return (
     <Button
-      variant="outline"
-      size="icon"
+      variant="ghost"
+      size="icon-sm"
       className="cursor-pointer"
       onClick={handleToggle}
     >
