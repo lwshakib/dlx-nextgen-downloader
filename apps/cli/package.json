@@ -1,6 +1,6 @@
 {
-  "name": "dlxx",
-  "version": "1.0.5",
+  "name": "@lwshakib/dlxx",
+  "version": "1.0.6",
   "description": "",
   "type": "module",
   "main": "dist/index.js",
