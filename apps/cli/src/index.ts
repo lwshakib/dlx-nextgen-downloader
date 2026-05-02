@@ -15,6 +15,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Handle Ctrl+C gracefully globally
+process.on('SIGINT', () => {
+  console.log(chalk.red('\n\n[!] Download cancelled by user. Cleaning up...'));
+  process.exit(0);
+});
+
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
@@ -447,17 +453,17 @@ async function handleM3U8Download(url: string): Promise<void> {
 
   const finalHeadersPath = headersPath || (fs.existsSync('headers.json') ? 'headers.json' : null);
   
-  if (!finalHeadersPath) {
-    throw new Error('Headers file not found. Please provide a path or ensure "headers.json" exists in the root directory.');
-  }
-
-  try {
-    console.log(chalk.gray(`[*] Loading headers from ${finalHeadersPath}...`));
-    const headersContent = await fs.readFile(finalHeadersPath, 'utf8');
-    const parsed = JSON.parse(headersContent);
-    customHeaders = { ...customHeaders, ...parsed };
-  } catch (e) {
-    throw new Error(`Failed to parse headers file: ${e instanceof Error ? e.message : String(e)}`);
+  if (finalHeadersPath) {
+    try {
+      console.log(chalk.gray(`[*] Loading headers from ${finalHeadersPath}...`));
+      const headersContent = await fs.readFile(finalHeadersPath, 'utf8');
+      const parsed = JSON.parse(headersContent);
+      customHeaders = { ...customHeaders, ...parsed };
+    } catch (e) {
+      console.log(chalk.yellow(`[!] Warning: Failed to parse headers file (${e instanceof Error ? e.message : String(e)}). Using defaults.`));
+    }
+  } else {
+    console.log(chalk.gray('[*] No headers file provided. Using default browser headers.'));
   }
 
   console.log(chalk.yellow('\n[*] Analyzing M3U8 manifest...'));
@@ -628,6 +634,125 @@ async function handleM3U8Download(url: string): Promise<void> {
     await fs.remove(tempDir);
     throw err;
   }
+}
+
+async function handleGenericDownload(url: string): Promise<void> {
+  const { filename, method, headersJson, bodyContent } = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'filename',
+      message: 'Enter output filename (optional):',
+      default: () => {
+        try {
+          return path.basename(new URL(url).pathname) || `download_${Date.now()}`;
+        } catch (e) {
+          return `download_${Date.now()}`;
+        }
+      }
+    },
+    {
+      type: 'list',
+      name: 'method',
+      message: 'Request Method:',
+      choices: ['GET', 'POST', 'PUT', 'DELETE'],
+      default: 'GET'
+    },
+    {
+      type: 'input',
+      name: 'headersJson',
+      message: 'Custom Headers JSON (optional, e.g. {"Auth":"..."}):',
+      validate: (input) => {
+        if (!input) return true;
+        try { JSON.parse(input); return true; } catch (e) { return 'Invalid JSON format. Please enter a valid JSON string.'; }
+      }
+    },
+    {
+      type: 'input',
+      name: 'bodyContent',
+      message: 'Request Body (optional):',
+      when: (ans) => ans.method !== 'GET'
+    }
+  ]);
+
+  let customHeaders: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  };
+
+  if (headersJson) {
+    try {
+      customHeaders = { ...customHeaders, ...JSON.parse(headersJson) };
+    } catch (e) {}
+  }
+
+  const outputPath = path.join(process.cwd(), filename);
+  console.log(chalk.yellow(`\n[*] Starting generic download: ${chalk.white(url)}`));
+
+  const axiosConfig: any = {
+    url,
+    method,
+    headers: customHeaders,
+    responseType: 'stream'
+  };
+
+  if (bodyContent) {
+    try {
+      axiosConfig.data = JSON.parse(bodyContent);
+    } catch (e) {
+      axiosConfig.data = bodyContent;
+    }
+  }
+
+  const response = await axios(axiosConfig);
+  const totalLength = response.headers['content-length'];
+  const writer = createWriteStream(outputPath);
+
+  const progressBar = new cliProgress.SingleBar({
+    format: 'Progress |' + chalk.green('{bar}') + '| {percentage}% | {value_formatted}/{total_formatted} | Speed: {speed}',
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591',
+    hideCursor: true
+  }, cliProgress.Presets.shades_classic);
+
+  let downloadedBytes = 0;
+  const totalBytes = totalLength ? parseInt(String(totalLength), 10) : 0;
+
+  if (totalBytes > 0) {
+    progressBar.start(totalBytes, 0, {
+      speed: '0 B/s',
+      value_formatted: formatBytes(0),
+      total_formatted: formatBytes(totalBytes)
+    });
+  } else {
+    console.log(chalk.blue('\n[*] Downloading (unknown size)...'));
+  }
+
+  let lastUpdate = Date.now();
+  let lastBytes = 0;
+  let speed = 0;
+
+  response.data.on('data', (chunk: Buffer) => {
+    downloadedBytes += chunk.length;
+    const now = Date.now();
+    const elapsed = (now - lastUpdate) / 1000;
+    if (elapsed >= 0.5) {
+      speed = (downloadedBytes - lastBytes) / elapsed;
+      lastUpdate = now;
+      lastBytes = downloadedBytes;
+    }
+
+    if (totalBytes > 0) {
+      progressBar.update(downloadedBytes, {
+        speed: `${formatBytes(speed)}/s`,
+        value_formatted: formatBytes(downloadedBytes),
+        total_formatted: formatBytes(totalBytes)
+      });
+    }
+  });
+
+  await pipeline(response.data, writer);
+  if (totalBytes > 0) progressBar.stop();
+
+  console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(outputPath)}`));
 }
 
 interface FacebookResolution {
@@ -822,12 +947,6 @@ async function crawlFacebook(url: string): Promise<FacebookData> {
 
 
 async function main() {
-  // Handle Ctrl+C gracefully
-  process.on('SIGINT', () => {
-    console.log(chalk.red('\n\n[!] Download cancelled by user. Exiting...'));
-    process.exit(0);
-  });
-
   // Clear the console for a clean start
   console.clear();
 
@@ -979,125 +1098,10 @@ async function main() {
       await handleM3U8Download(url);
       return;
     } else {
-      // Extract filename from URL for non-tiktok downloads
-      filename = path.basename(new URL(url).pathname);
-      if (!filename || filename === '/') {
-        filename = 'downloaded_file_' + Date.now();
-      }
+      console.log(chalk.yellow('[!] Platform not specifically recognized. Attempting generic download...'));
+      await handleGenericDownload(url);
+      return;
     }
-
-    const outputPath = path.join(process.cwd(), filename);
-
-    console.log(chalk.yellow(`\nStarting download: ${chalk.white(url)}`));
-    console.log(chalk.yellow(`Saving to: ${chalk.white(outputPath)}`));
-
-    // Start download
-    const axiosConfig: any = {
-      url,
-      method: 'GET',
-      responseType: 'stream',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      }
-    };
-
-    if (tiktokTokens) {
-      const cookieParts = [];
-      if (tiktokTokens.msToken) cookieParts.push(`msToken=${tiktokTokens.msToken}`);
-      if (tiktokTokens.ttChainToken) cookieParts.push(`tt_chain_token=${tiktokTokens.ttChainToken}`);
-      
-      if (cookieParts.length > 0) {
-        axiosConfig.headers['Cookie'] = cookieParts.join('; ');
-        axiosConfig.headers['Referer'] = 'https://www.tiktok.com/';
-      }
-    }
-
-    const response = await axios(axiosConfig);
-
-    const totalLength = response.headers['content-length'];
-
-    console.log(chalk.blue('Downloading...'));
-
-    const writer = createWriteStream(outputPath);
-
-    // Initialize progress bar
-    const progressBar = new cliProgress.SingleBar({
-      format: 'Progress |' + chalk.green('{bar}') + '| {percentage}% | {value_formatted}/{total_formatted} | Speed: {speed}',
-      barCompleteChar: '\u2588',
-      barIncompleteChar: '\u2591',
-      hideCursor: true
-    }, cliProgress.Presets.shades_classic);
-
-    let downloadedBytes = 0;
-    const totalBytes = totalLength ? parseInt(String(totalLength), 10) : 0;
-
-    if (totalBytes > 0) {
-      progressBar.start(totalBytes, 0, {
-        speed: '0 Bytes/s',
-        value_formatted: formatBytes(0),
-        total_formatted: formatBytes(totalBytes)
-      });
-    } else {
-      console.log(chalk.blue('Downloading (unknown size)...'));
-    }
-
-    let lastUpdate = Date.now();
-    let lastBytes = 0;
-    let speed = 0;
-
-    response.data.on('data', (chunk: Buffer) => {
-      downloadedBytes += chunk.length;
-      
-      const now = Date.now();
-      const elapsed = (now - lastUpdate) / 1000;
-      
-      // Update speed calculation every 500ms for smoother updates
-      if (elapsed >= 0.5) {
-        speed = (downloadedBytes - lastBytes) / elapsed;
-        lastUpdate = now;
-        lastBytes = downloadedBytes;
-      }
-
-      if (totalBytes > 0) {
-        progressBar.update(downloadedBytes, {
-          speed: `${formatBytes(speed)}/s`,
-          value_formatted: formatBytes(downloadedBytes),
-          total_formatted: formatBytes(totalBytes)
-        });
-      }
-    });
-
-    await pipeline(response.data, writer);
-
-    if (totalBytes > 0) {
-      progressBar.stop();
-    }
-
-    if (audioUrlToMux) {
-      const audioPath = path.join(process.cwd(), `temp_audio_${Date.now()}.m4a`);
-      const finalMuxedPath = path.join(process.cwd(), `muxed_${filename}`);
-      
-      console.log(chalk.yellow('\nDownloading audio stream for high-res muxing...'));
-      const audioRes = await axios({ url: audioUrlToMux, method: 'GET', responseType: 'stream' });
-      const audioWriter = createWriteStream(audioPath);
-      await pipeline(audioRes.data, audioWriter);
-
-      console.log(chalk.blue('Muxing video and audio with FFmpeg...'));
-      try {
-        execSync(`ffmpeg -y -i "${outputPath}" -i "${audioPath}" -c copy -map 0:v:0 -map 1:a:0 "${finalMuxedPath}"`, { stdio: 'ignore' });
-        await fs.remove(outputPath);
-        await fs.remove(audioPath);
-        await fs.move(finalMuxedPath, outputPath);
-        console.log(chalk.green('✓ Muxing complete!'));
-      } catch (e) {
-        console.error(chalk.red('\nFFmpeg muxing failed. You may need to install FFmpeg.'));
-        console.log(chalk.yellow(`Video and audio saved separately as: ${filename} and ${path.basename(audioPath)}`));
-      }
-    }
-
-    console.log(chalk.green('\n✓ Download Complete!'));
-    console.log(chalk.green(`File saved as: ${chalk.bold(filename)}`));
-    
   } catch (error: any) {
     console.error(chalk.red('\n✖ Error occurred during download:'));
     console.error(chalk.red(error.message));
