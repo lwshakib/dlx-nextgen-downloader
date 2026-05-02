@@ -17,7 +17,7 @@ export interface Resolution {
 export interface VideoData {
   title: string;
   thumbnail: string;
-  resolutions: Resolution[];
+  resolutions: Array<Resolution>;
 }
 
 function extractVideoFormat(url: string, mimeType?: string | null): string {
@@ -38,8 +38,8 @@ function extractVideoFormat(url: string, mimeType?: string | null): string {
   return "mp4";
 }
 
-function parseRepresentationBlock(repBlock: string): StreamData[] {
-  const streams: StreamData[] = [];
+function parseRepresentationBlock(repBlock: string): Array<StreamData> {
+  const streams: Array<StreamData> = [];
   let fullMatch = repBlock.match(/<Representation[^>]*>[\s\S]*?<\/Representation>/i);
   if (!fullMatch) fullMatch = repBlock.match(/Representation[^>]*>[\s\S]*?<\/Representation/i);
   if (!fullMatch) return streams;
@@ -89,8 +89,8 @@ function parseRepresentationBlock(repBlock: string): StreamData[] {
   return streams;
 }
 
-function extractDashManifestStreams(content: string): StreamData[] {
-  const streams: StreamData[] = [];
+function extractDashManifestStreams(content: string): Array<StreamData> {
+  const streams: Array<StreamData> = [];
   const unescapedContent = content
     .replace(/\\u003C/g, "<")
     .replace(/\\u003E/g, ">")
@@ -119,8 +119,8 @@ function decodeHtmlEntities(text: string): string {
 function cleanTitle(title: string): string {
     return title
         .replace(/[\s·|]*[\d.]+[KMB]?\s*(views?|reactions?|shares?|comments?|likes?)[\s·|]*/gi, "")
-        .replace(/\s*[\|·]\s*$/, "")
-        .replace(/^\s*[\|·]\s*/, "")
+        .replace(/\s*[|·]\s*$/, "")
+        .replace(/^\s*[|·]\s*/, "")
         .trim();
 }
 
@@ -157,7 +157,7 @@ function extractThumbnail(content: string): string {
   return ogImageMatch ? ogImageMatch[1].trim() : "";
 }
 
-function formatVideoData(streamsData: StreamData[], title: string, thumbnail: string): VideoData {
+function formatVideoData(streamsData: Array<StreamData>, title: string, thumbnail: string): VideoData {
     const qualityMap = new Map<string, Resolution>();
     
     // Filter to combined streams or high quality video
