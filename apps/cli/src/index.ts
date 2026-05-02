@@ -9,7 +9,11 @@ import path from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Buffer } from 'buffer';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return '0 Bytes';
@@ -181,6 +185,14 @@ async function crawlTikTok(url: string): Promise<TikTokData> {
   };
 }
 
+interface HLSFormat {
+  name: string;
+  height: number;
+  url: string;
+  type: 'video' | 'audio';
+  hasAudio: boolean;
+}
+
 interface YouTubeResolution {
   itags: number[];
   qualityLabel: string;
@@ -208,7 +220,7 @@ class YouTubeCookieJar {
 
   update(setCookie: string[] | null) {
     if (!setCookie) return;
-    setCookie.forEach(line => {
+    setCookie.forEach((line: string) => {
       const part = line.split(';')[0];
       if (part) {
         const [key, ...rest] = part.split('=');
@@ -220,6 +232,56 @@ class YouTubeCookieJar {
   getHeader(): string {
     return Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
   }
+}
+
+async function parseHlsManifest(url: string, headers: Record<string, string>): Promise<HLSFormat[]> {
+  const res = await axios.get(url, { headers });
+  const lines: string[] = res.data.split('\n');
+  const formats: HLSFormat[] = [];
+  const seen = new Set();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (line.startsWith('#EXT-X-STREAM-INF')) {
+      const info = line;
+      let streamUrl = lines[i + 1]?.trim();
+      if (!streamUrl || streamUrl.startsWith('#')) continue;
+      if (!streamUrl.startsWith('http')) streamUrl = new URL(streamUrl!, url).href;
+
+      const resMatch = info.match(/RESOLUTION=(\d+x\d+)/);
+      const codecs = info.match(/CODECS="([^"]+)"/)?.[1] || '';
+      const bw = info.match(/BANDWIDTH=(\d+)/)?.[1] || '0';
+      
+      let name = '', height = 0, type: 'video' | 'audio' = 'video';
+      let hasAudio = codecs.includes('mp4a') || codecs.includes('opus');
+
+      if (resMatch) {
+        height = parseInt(resMatch[1]!.split('x')[1]!);
+        name = `[Video] ${height}p (${resMatch[1]})`;
+        type = 'video';
+      } else if (hasAudio) {
+        name = `[Audio Track] ${Math.round(parseInt(bw)/1000)}kbps`;
+        height = -1; type = 'audio';
+      } else { continue; }
+      
+      if (seen.has(name)) continue;
+      seen.add(name);
+      formats.push({ name, height, url: streamUrl, type, hasAudio });
+    } else if (line.toUpperCase().includes('TYPE=AUDIO') && line.includes('URI=')) {
+      const uriMatch = line.match(/URI="([^"]+)"/i);
+      if (!uriMatch) continue;
+      let streamUrl = uriMatch[1]!;
+      if (!streamUrl.startsWith('http')) streamUrl = new URL(streamUrl, url).href;
+
+      const nameMatch = line.match(/NAME="([^"]+)"/i);
+      const bw = line.match(/BANDWIDTH=(\d+)/i)?.[1] || '128000';
+      const name = `[Dedicated Audio] ${nameMatch ? nameMatch[1] : 'Track'} (${Math.round(parseInt(bw)/1000)}kbps)`;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      formats.push({ name, height: -1, url: streamUrl, type: 'audio', hasAudio: true });
+    }
+  }
+  return formats;
 }
 
 async function crawlYouTube(videoId: string): Promise<YouTubeData> {
@@ -234,7 +296,6 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
   let videoDetails: any = null;
   let lastError = "";
 
-  // Approach 1: Direct HTML Extraction (Bypasses Player API)
   try {
     const res = await fetch(watchUrl, { 
       headers: { 
@@ -242,7 +303,8 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
         "Referer": "https://www.youtube.com/"
       } 
     });
-    jar.update(res.headers.getSetCookie ? res.headers.getSetCookie() : []);
+    const getSetCookie = (res.headers as any).getSetCookie;
+    jar.update(typeof getSetCookie === 'function' ? getSetCookie.call(res.headers) : []);
     html = await res.text();
 
     const playerResMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\});/);
@@ -255,14 +317,16 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
     }
   } catch (e) {}
 
-  // If HTML extraction failed, try Approach 2: Player API Rotation
-  let apiKey = (html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i) || [])[1];
+  let apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i);
+  let apiKey = apiKeyMatch ? apiKeyMatch[1] : undefined;
 
   if (!streamingData && !apiKey) {
     const resEmbed = await fetch(embedUrl, { headers: { "User-Agent": browserUserAgent, "Referer": "https://www.youtube.com/" } });
-    jar.update(resEmbed.headers.getSetCookie ? resEmbed.headers.getSetCookie() : []);
+    const getSetCookie = (resEmbed.headers as any).getSetCookie;
+    jar.update(typeof getSetCookie === 'function' ? getSetCookie.call(resEmbed.headers) : []);
     html = await resEmbed.text();
-    apiKey = (html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i) || [])[1];
+    apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i);
+    apiKey = apiKeyMatch ? apiKeyMatch[1] : undefined;
   }
                   
   const visitorData = (html.match(/"visitorData":"([^"]+)"/) || html.match(/visitor_data":"([^"]+)"/i) || [])[1] || "";
@@ -274,64 +338,43 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
 
   if (!streamingData) {
     const clients = [
-      { 
-        name: "WEB_EMBEDDED_PLAYER", 
-      version: "1.20240101.01.01", 
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    },
-    { 
-      name: "TVHTML5", 
-      version: "7.20230405.08.01", 
-      userAgent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)"
-    },
-    { 
-      name: "ANDROID", 
-      version: "19.30.36", 
-      userAgent: "com.google.android.youtube/19.30.36 (Linux; U; Android 14; en_US) gzip"
-    }
-  ];
+      { name: "WEB_EMBEDDED_PLAYER", version: "1.20240101.01.01", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+      { name: "TVHTML5", version: "7.20230405.08.01", userAgent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)" },
+      { name: "ANDROID", version: "19.30.36", userAgent: "com.google.android.youtube/19.30.36 (Linux; U; Android 14; en_US) gzip" }
+    ];
 
-  for (const client of clients) {
-    try {
-      const payload = {
-        context: {
-          client: {
-            clientName: client.name,
-            clientVersion: client.version,
-            userAgent: client.userAgent,
-            hl: 'en', gl: 'US', visitorData
-          }
-        },
-        videoId
-      };
+    for (const client of clients) {
+      try {
+        const payload = {
+          context: { client: { clientName: client.name, clientVersion: client.version, userAgent: client.userAgent, hl: 'en', gl: 'US', visitorData } },
+          videoId
+        };
 
-      const playerRes = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "User-Agent": client.userAgent,
-          "Cookie": jar.getHeader(),
-          "X-Youtube-Client-Name": client.name === "WEB_EMBEDDED_PLAYER" ? "1" : (client.name === "TVHTML5" ? "7" : "3"),
-          "X-Youtube-Client-Version": client.version
-        },
-        body: JSON.stringify(payload)
-      });
+        const playerRes = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey || ''}`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "User-Agent": client.userAgent,
+            "Cookie": jar.getHeader(),
+            "X-Youtube-Client-Name": client.name === "WEB_EMBEDDED_PLAYER" ? "1" : (client.name === "TVHTML5" ? "7" : "3"),
+            "X-Youtube-Client-Version": client.version
+          },
+          body: JSON.stringify(payload)
+        });
 
-      const apiData = await playerRes.json() as any;
-      if (apiData.streamingData) {
-        streamingData = apiData.streamingData;
-        videoDetails = apiData.videoDetails;
-        break; // Success! Exit the rotation loop
+        const apiData = await playerRes.json() as any;
+        if (apiData.streamingData) {
+          streamingData = apiData.streamingData;
+          videoDetails = apiData.videoDetails;
+          break;
+        }
+        if (apiData.playabilityStatus) lastError = apiData.playabilityStatus.reason || apiData.playabilityStatus.status;
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
       }
-      
-      if (apiData.playabilityStatus) lastError = apiData.playabilityStatus.reason || apiData.playabilityStatus.status;
-    } catch (e) {
-      lastError = e instanceof Error ? e.message : String(e);
     }
   }
-}
 
-  // Parse findings into resolutions
   if (streamingData) {
     const title = videoDetails?.title || "YouTube Video";
     const description = videoDetails?.shortDescription || "";
@@ -344,7 +387,7 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
         const isVideo = f.mimeType.includes('video/');
         if (isVideo) {
           resolutions.push({
-            itags: [f.itag],
+            itags: [f.itags || f.itag],
             qualityLabel: f.qualityLabel || (f.height ? `${f.height}p` : 'Unknown'),
             bitrate: f.bitrate,
             codec: f.mimeType.split(';')[0],
@@ -367,18 +410,11 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
 
 async function getBestYouTubeAudio(videoId: string, apiKey: string, visitorData: string): Promise<string> {
   const payload = {
-    context: {
-      client: {
-        clientName: "IOS",
-        clientVersion: "19.29.1",
-        userAgent: "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)",
-        visitorData
-      }
-    },
+    context: { client: { clientName: "IOS", clientVersion: "19.29.1", userAgent: "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)", visitorData } },
     videoId
   };
 
-  const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+  const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey || ''}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -391,6 +427,207 @@ async function getBestYouTubeAudio(videoId: string, apiKey: string, visitorData:
 
   if (!audioFormat?.url) throw new Error("Could not find audio stream for YouTube video.");
   return audioFormat.url;
+}
+
+async function handleM3U8Download(url: string): Promise<void> {
+  // 1. Ask for headers file
+  const { headersPath } = await inquirer.prompt([{
+    type: 'input',
+    name: 'headersPath',
+    message: 'Path to headers JSON file (press Enter to check root "headers.json"):',
+    validate: (input: string) => {
+        if (!input) return true;
+        return fs.existsSync(input) ? true : 'File does not exist.';
+    }
+  }]);
+
+  let customHeaders: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  };
+
+  const finalHeadersPath = headersPath || (fs.existsSync('headers.json') ? 'headers.json' : null);
+  
+  if (!finalHeadersPath) {
+    throw new Error('Headers file not found. Please provide a path or ensure "headers.json" exists in the root directory.');
+  }
+
+  try {
+    console.log(chalk.gray(`[*] Loading headers from ${finalHeadersPath}...`));
+    const headersContent = await fs.readFile(finalHeadersPath, 'utf8');
+    const parsed = JSON.parse(headersContent);
+    customHeaders = { ...customHeaders, ...parsed };
+  } catch (e) {
+    throw new Error(`Failed to parse headers file: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  console.log(chalk.yellow('\n[*] Analyzing M3U8 manifest...'));
+  
+  const formats = await parseHlsManifest(url, customHeaders);
+  
+  let downloadUrl = url;
+  let finalTitle = '';
+
+  if (formats.length > 0) {
+    console.log(chalk.green(`\n[+] Master Playlist detected with ${formats.length} streams.`));
+    const { selectedFormat } = await inquirer.prompt([{
+      type: 'select',
+      name: 'selectedFormat',
+      message: 'Select stream quality:',
+      choices: formats.sort((a, b) => b.height - a.height).map(f => ({ name: f.name, value: f }))
+    }]);
+    downloadUrl = selectedFormat.url;
+  } else {
+    console.log(chalk.cyan('\n[*] Media Playlist detected (single stream).'));
+  }
+
+  const { title } = await inquirer.prompt([{
+    type: 'input',
+    name: 'title',
+    message: 'Enter video title (optional, leave empty for default):',
+    default: `hls_download_${Date.now()}`
+  }]);
+  finalTitle = title;
+
+  const dest = path.join(process.cwd(), `${finalTitle.replace(/[^a-z0-9]/gi, '_')}.mp4`);
+  const tempDir = path.join(process.cwd(), `temp_${Date.now()}`);
+  await fs.ensureDir(tempDir);
+
+  try {
+    console.log(chalk.blue("\n📥 Fetching media playlist..."));
+    const response = await axios.get(downloadUrl, { headers: customHeaders });
+    const playlistContent = response.data;
+    const lines = playlistContent.split('\n');
+
+    // Handle AES-128 Key
+    const keyMatch = playlistContent.match(/#EXT-X-KEY:METHOD=AES-128,URI="([^"]+)"/);
+    if (keyMatch) {
+        console.log(chalk.yellow("🔑 Detected AES-128 encryption. Fetching key..."));
+        const keyUri = keyMatch[1];
+        const keyUrl = keyUri.startsWith('http') ? keyUri : new URL(keyUri, downloadUrl).href;
+        const keyData = await axios.get(keyUrl, { headers: customHeaders, responseType: 'arraybuffer' });
+        await fs.writeFile(path.join(tempDir, 'video.key'), Buffer.from(keyData.data));
+        console.log(chalk.green("✅ Decryption key saved."));
+    }
+
+    const segments = lines.filter((line: string) => line.trim() && !line.startsWith('#'));
+    const totalSegments = segments.length;
+    const baseUrl = downloadUrl.substring(0, downloadUrl.lastIndexOf('/') + 1);
+
+    console.log(chalk.blue(`✅ Found ${totalSegments} segments. Starting parallel download...\n`));
+
+    const progressBar = new cliProgress.SingleBar({
+        format: chalk.cyan('💎 Progress |') + chalk.green('{bar}') + '| {percentage}% | {value}/{total} Segments | Speed: {speed} | Size: {size}',
+        barCompleteChar: '\u2588',
+        barIncompleteChar: '\u2591',
+        hideCursor: true
+    }, cliProgress.Presets.shades_classic);
+
+    let completed = 0;
+    let totalBytes = 0;
+    let lastUpdate = Date.now();
+    let lastBytes = 0;
+    let speedFormatted = '0 B/s';
+
+    progressBar.start(totalSegments, 0, { speed: '0 B/s', size: '0 B' });
+
+    const CONCURRENCY = 15;
+    const queue = [...segments.entries()];
+    
+    async function worker() {
+        while (queue.length > 0) {
+            const item = queue.shift();
+            if (!item) break;
+            const [index, segmentName] = item;
+            const segmentUrl = segmentName.startsWith('http') ? segmentName : new URL(segmentName, baseUrl).href;
+            const segmentPath = path.join(tempDir, `${index.toString().padStart(5, '0')}.ts`);
+            
+            let retries = 3;
+            while (retries > 0) {
+                try {
+                    const res = await axios.get(segmentUrl, { 
+                        headers: customHeaders, 
+                        responseType: 'arraybuffer',
+                        timeout: 30000 
+                    });
+                    const buffer = Buffer.from(res.data);
+                    await fs.writeFile(segmentPath, buffer);
+                    
+                    completed++;
+                    totalBytes += buffer.length;
+                    
+                    const now = Date.now();
+                    const elapsed = (now - lastUpdate) / 1000;
+                    if (elapsed >= 0.5) {
+                        const speed = (totalBytes - lastBytes) / elapsed;
+                        speedFormatted = `${formatBytes(speed)}/s`;
+                        lastUpdate = now;
+                        lastBytes = totalBytes;
+                    }
+
+                    progressBar.update(completed, {
+                        speed: speedFormatted,
+                        size: formatBytes(totalBytes)
+                    });
+                    break;
+                } catch (err) {
+                    retries--;
+                    if (retries === 0) {
+                        console.error(chalk.red(`\n❌ Failed segment ${index}: ${err instanceof Error ? err.message : String(err)}`));
+                    }
+                }
+            }
+        }
+    }
+
+    await Promise.all(Array(CONCURRENCY).fill(0).map(() => worker()));
+    progressBar.stop();
+
+    console.log(chalk.green("\n📦 Download complete. Preparing local playlist..."));
+
+    // Generate Local m3u8
+    const localM3u8Path = path.join(tempDir, 'local.m3u8');
+    let localM3u8Content = "";
+    let segmentIndex = 0;
+
+    for (const line of lines) {
+        if (line.startsWith('#EXT-X-KEY')) {
+            localM3u8Content += `#EXT-X-KEY:METHOD=AES-128,URI="video.key"\n`;
+        } else if (line.trim() && !line.startsWith('#')) {
+            localM3u8Content += `${segmentIndex.toString().padStart(5, '0')}.ts\n`;
+            segmentIndex++;
+        } else {
+            localM3u8Content += line + "\n";
+        }
+    }
+    await fs.writeFile(localM3u8Path, localM3u8Content);
+
+    console.log(chalk.blue("🎬 Finalizing video (Merging)..."));
+    
+    await new Promise<void>((resolve, reject) => {
+        const ffmpeg = spawn('ffmpeg', [
+            '-y',
+            '-allowed_extensions', 'ALL',
+            '-i', 'local.m3u8',
+            '-c', 'copy',
+            '-bsf:a', 'aac_adtstoasc',
+            dest
+        ], { cwd: tempDir });
+
+        ffmpeg.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`FFmpeg exited with code ${code}`));
+        });
+    });
+
+    console.log(chalk.green.bold(`\n🎉 SUCCESS! Full video saved to: ${path.basename(dest)}`));
+    console.log(chalk.dim("🧹 Cleaning up temporary files..."));
+    await fs.remove(tempDir);
+    console.log(chalk.dim("Done."));
+
+  } catch (err) {
+    await fs.remove(tempDir);
+    throw err;
+  }
 }
 
 interface FacebookResolution {
@@ -458,7 +695,7 @@ async function crawlFacebook(url: string): Promise<FacebookData> {
         throw new Error(`Failed to fetch Facebook page (${response.status})`);
     }
 
-    const content = await response.text();
+    const content: string = await response.text();
 
     let targetVideoId = finalIdMatch ? finalIdMatch[1] : null;
     if (!targetVideoId) {
@@ -585,6 +822,12 @@ async function crawlFacebook(url: string): Promise<FacebookData> {
 
 
 async function main() {
+  // Handle Ctrl+C gracefully
+  process.on('SIGINT', () => {
+    console.log(chalk.red('\n\n[!] Download cancelled by user. Exiting...'));
+    process.exit(0);
+  });
+
   // Clear the console for a clean start
   console.clear();
 
@@ -732,6 +975,9 @@ async function main() {
         console.error(chalk.red(`\nError crawling Facebook: ${err instanceof Error ? err.message : String(err)}`));
         return;
       }
+    } else if (url.toLowerCase().includes('.m3u8') || url.toLowerCase().includes('playlist')) {
+      await handleM3U8Download(url);
+      return;
     } else {
       // Extract filename from URL for non-tiktok downloads
       filename = path.basename(new URL(url).pathname);
@@ -776,7 +1022,7 @@ async function main() {
 
     // Initialize progress bar
     const progressBar = new cliProgress.SingleBar({
-      format: 'Progress |' + chalk.cyan('{bar}') + '| {percentage}% | {value_formatted}/{total_formatted} | Speed: {speed}',
+      format: 'Progress |' + chalk.green('{bar}') + '| {percentage}% | {value_formatted}/{total_formatted} | Speed: {speed}',
       barCompleteChar: '\u2588',
       barIncompleteChar: '\u2591',
       hideCursor: true
