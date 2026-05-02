@@ -1,14 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-function formatBytes(bytes: number, decimals = 2) {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
-}
 
 function getQualityLabel(height?: number | null, qualityType?: string | null) {
   if (height && Number.isFinite(height)) {
@@ -611,8 +603,8 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
       const html = document.documentElement.innerHTML;
       
       // Extract video ID
-      const videoIdMatch = html.match(/"video_id":"(\d+)"/) || videoUrl.match(/\/videos\/(\d+)/) || videoUrl.match(/v=(\d+)/);
-      const videoId = videoIdMatch ? videoIdMatch[1] : null;
+      // videoId is extracted but currently unused
+      html.match(/"video_id":"(\d+)"/) || videoUrl.match(/\/videos\/(\d+)/) || videoUrl.match(/v=(\d+)/);
 
       // Extract title
       const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/);
@@ -673,7 +665,7 @@ function DownloadVideoButton({ video }: { video: HTMLVideoElement }) {
     }
   };
 
-  const fetchTikTokData = async (videoUrl: string) => {
+  const fetchTikTokData = async (_videoUrl: string) => {
     setIsLoading(true);
     setError(null);
 
