@@ -19,7 +19,7 @@ export interface YouTubeData {
   videoId: string;
   title: string | null;
   thumbnail: string | null;
-  resolutions: YouTubeResolution[];
+  resolutions: Array<YouTubeResolution>;
   audio: YouTubeAudio | null;
 }
 
@@ -63,8 +63,8 @@ export async function crawlYouTube(url: string): Promise<YouTubeData> {
 
   const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
   
-  const videoFormats: YouTubeResolution[] = [];
-  const audioFormats: YouTubeAudio[] = [];
+  const videoFormats: Array<YouTubeResolution> = [];
+  const audioFormats: Array<YouTubeAudio> = [];
 
   formats.forEach((f: any) => {
     if (!f.url) return;
