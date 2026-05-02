@@ -73,9 +73,6 @@ importers:
       '@types/chalk':
         specifier: ^2.2.4
         version: 2.2.4
-      '@types/ffmpeg-static':
-        specifier: ^5.1.0
-        version: 5.1.0
       '@types/fs-extra':
         specifier: ^11.0.4
         version: 11.0.4
@@ -2738,10 +2735,6 @@ packages:
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
-
-  '@types/ffmpeg-static@5.1.0':
-    resolution: {integrity: sha512-U4gh2IjVywwe4BaK+7RnCgTN4DzCwl3f849JV7STNIQDoWBihLAYRv80tduYxIP8sN2dt9ccp1BrNXS0CiMyZA==}
-    deprecated: This is a stub types definition. ffmpeg-static provides its own type definitions, so you do not need this installed.
 
   '@types/filesystem@0.0.36':
     resolution: {integrity: sha512-vPDXOZuannb9FZdxgHnqSwAG/jvdGM8Wq+6N4D/d80z+D4HWH+bItqsZaVRQykAn6WEVeEkLm2oQigyHtgb0RA==}
@@ -9289,12 +9282,6 @@ snapshots:
   '@types/esrecurse@4.3.1': {}
 
   '@types/estree@1.0.8': {}
-
-  '@types/ffmpeg-static@5.1.0':
-    dependencies:
-      ffmpeg-static: 5.3.0
-    transitivePeerDependencies:
-      - supports-color
 
   '@types/filesystem@0.0.36':
     dependencies:

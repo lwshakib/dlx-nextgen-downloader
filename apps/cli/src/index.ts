@@ -11,7 +11,8 @@ import { pipeline } from 'stream/promises';
 import { Buffer } from 'buffer';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import ffmpegPath from 'ffmpeg-static';
+import _ffmpegPath from 'ffmpeg-static';
+const ffmpegPath = _ffmpegPath as unknown as string | null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -618,9 +619,9 @@ async function handleM3U8Download(url: string): Promise<void> {
             '-c', 'copy',
             '-bsf:a', 'aac_adtstoasc',
             dest
-        ], { cwd: tempDir });
+        ], { cwd: tempDir }) as any;
 
-        ffmpeg.on('close', (code) => {
+        ffmpeg.on('close', (code: number | null) => {
             if (code === 0) resolve();
             else reject(new Error(`FFmpeg exited with code ${code}`));
         });
