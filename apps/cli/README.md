@@ -1,58 +1,63 @@
 # DLX NextGen CLI
 
-The `dlx` CLI is a fast, interactive Node.js command-line tool for downloading videos directly from your terminal. It is part of the DLX NextGen Downloader ecosystem.
-
-## Features
-
-- **Interactive Prompts**: Built with `inquirer` for an easy-to-use experience without complex arguments.
-- **Platform Support**: Downloads videos from:
-  - **YouTube**: Supports high-quality adaptive formats (automatically muxes video and audio).
-  - **TikTok**: Downloads without watermarks.
-  - **Facebook**: Supports both public and private videos.
-- **Visual Progress**: Real-time progress bars via `cli-progress` showing percentage, downloaded bytes, and speed.
-- **Standalone Engine**: Implements its own scraping logic (client rotation, rehydration extraction) independently from the desktop app.
+The `dlx` CLI is a fast, interactive Node.js command-line tool for downloading videos directly from your terminal.
 
 ## Installation
 
-Since this is part of the Turborepo workspace, you can build and link it locally:
+Install the package globally using npm:
 
 ```bash
-cd apps/cli
-pnpm install
-pnpm build
+npm install -g @lwshakib/dlx
 ```
 
-The binary will be built in the `dist/` directory. You can run it directly:
-```bash
-node dist/index.js
-```
+Or using pnpm:
 
-Or you can link it globally using pnpm or npm:
 ```bash
-pnpm link --global
-```
-Then you can run it from anywhere using:
-```bash
-dlx
+pnpm add -g @lwshakib/dlx
 ```
 
 ## Usage
 
-Simply run the command:
+Simply run the command from anywhere in your terminal:
+
 ```bash
 dlx
 ```
 
-The CLI will prompt you to enter the URL of the video you want to download. 
-After analyzing the URL, it will present a list of available qualities and formats. 
-Select your preferred option, and the download will begin immediately, saving the file to your current working directory.
+The CLI will prompt you for the video URL and guide you through selecting the quality and format.
 
-## Development
+## Features
 
-To develop the CLI with hot-reloading:
+- **Embedded Engine**: Includes its own FFmpeg engine—no need to install external software on your system.
+- **Interactive Prompts**: Easy-to-use interface with no complex arguments required.
+- **Platform Support**: 
+  - **YouTube**: High-quality adaptive formats (4K/1080p) with automatic muxing.
+  - **TikTok**: Downloads without watermarks.
+  - **Facebook**: Support for public and private videos.
+- **Visual Progress**: Real-time progress bars showing speed, size, and percentage.
 
-```bash
-pnpm dev
-```
+## Local Development (Build from Source)
 
-This will run `tsc-watch` and automatically execute the CLI on successful compilation.
+If you want to build and run the CLI locally from this repository:
+
+1. **Build the project**:
+   ```bash
+   cd apps/cli
+   pnpm install
+   pnpm build
+   ```
+
+2. **Run locally**:
+   ```bash
+   node dist/index.js
+   ```
+
+3. **Development with hot-reload**:
+   ```bash
+   pnpm dev
+   ```
+
+4. **Link for global use**:
+   ```bash
+   pnpm link --global
+   ```
