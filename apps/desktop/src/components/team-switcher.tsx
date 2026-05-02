@@ -5,7 +5,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@workspace/ui/components/sidebar";
-import { ChevronsUpDown, Plus } from "lucide-react";
 import * as React from "react";
 
 export function TeamSwitcher({
