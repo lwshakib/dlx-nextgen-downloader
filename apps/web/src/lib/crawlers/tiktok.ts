@@ -11,7 +11,7 @@ export interface TikTokResolution {
 export interface TikTokData {
   title: string | null;
   thumbnail: string | null;
-  resolutions: TikTokResolution[];
+  resolutions: Array<TikTokResolution>;
 }
 
 const SCRIPT_ID = "__UNIVERSAL_DATA_FOR_REHYDRATION__";
