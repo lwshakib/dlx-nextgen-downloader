@@ -1,5 +1,4 @@
 import axios from "axios";
-import { Buffer } from "buffer";
 
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return "0 Bytes";
@@ -410,7 +409,7 @@ function cleanFbUrl(url: string | null | undefined) {
 
 function decodeFbUnicode(str: string | null | undefined) {
   if (!str) return str;
-  return str.replace(/\\u([a-fA-F0-9]{4})/g, (match, grp) =>
+  return str.replace(/\\u([a-fA-F0-9]{4})/g, (_match, grp) =>
     String.fromCharCode(parseInt(grp, 16))
   );
 }
@@ -460,7 +459,7 @@ export async function crawlFacebook(url: string) {
   const scriptRegex =
     /<script type="application\/json"[^>]*data-sjs>([\s\S]*?)<\/script>/g;
   let match;
-  let metadata = {
+  const metadata = {
     title: null as string | null | undefined,
     description: null as string | null | undefined,
     thumbnail_url: null as string | null | undefined,
