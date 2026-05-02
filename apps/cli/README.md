@@ -1,6 +1,6 @@
 # DLX NextGen CLI
 
-The `dlxx` CLI is a fast, interactive Node.js command-line tool for downloading videos directly from your terminal. It is part of the DLX NextGen Downloader ecosystem.
+The `dlx` CLI is a fast, interactive Node.js command-line tool for downloading videos directly from your terminal. It is part of the DLX NextGen Downloader ecosystem.
 
 ## Features
 
@@ -33,14 +33,14 @@ pnpm link --global
 ```
 Then you can run it from anywhere using:
 ```bash
-dlxx
+dlx
 ```
 
 ## Usage
 
 Simply run the command:
 ```bash
-dlxx
+dlx
 ```
 
 The CLI will prompt you to enter the URL of the video you want to download. 

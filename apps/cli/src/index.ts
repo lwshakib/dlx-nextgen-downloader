@@ -951,7 +951,7 @@ async function main() {
   console.clear();
 
   // Display a minimal welcome message
-  const welcomeText = 'DLXX - Nextgen Downloader';
+  const welcomeText = 'DLX - Nextgen Downloader';
   console.log(chalk.cyan.bold(welcomeText));
   console.log(chalk.cyan('='.repeat(welcomeText.length)));
   console.log(chalk.gray('Your ultra-fast file downloader CLI\n'));
