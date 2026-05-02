@@ -11,6 +11,7 @@ import { pipeline } from 'stream/promises';
 import { Buffer } from 'buffer';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import ffmpegPath from 'ffmpeg-static';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -610,7 +611,7 @@ async function handleM3U8Download(url: string): Promise<void> {
     console.log(chalk.blue("🎬 Finalizing video (Merging)..."));
     
     await new Promise<void>((resolve, reject) => {
-        const ffmpeg = spawn('ffmpeg', [
+        const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
             '-y',
             '-allowed_extensions', 'ALL',
             '-i', 'local.m3u8',
