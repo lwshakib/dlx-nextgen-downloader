@@ -11,15 +11,22 @@ import { pipeline } from 'stream/promises';
 import { Buffer } from 'buffer';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import os from 'os';
 import _ffmpegPath from 'ffmpeg-static';
 const ffmpegPath = _ffmpegPath as unknown as string | null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+let activeTempDir: string | null = null;
 
 // Handle Ctrl+C gracefully globally
 process.on('SIGINT', () => {
   console.log(chalk.red('\n\n[!] Download cancelled by user. Cleaning up...'));
+  if (activeTempDir && fs.existsSync(activeTempDir)) {
+    fs.removeSync(activeTempDir);
+  }
   process.exit(0);
 });
 
@@ -51,6 +58,7 @@ interface TikTokData {
   tokens?: {
     msToken: string | null;
     ttChainToken: string | null;
+    cookieString?: string;
   };
 }
 
@@ -69,8 +77,12 @@ function getQualityLabel(height?: number | null, qualityType?: string | null) {
 }
 
 async function crawlTikTok(url: string): Promise<TikTokData> {
-  // First fetch to get cookies and tokens (NO HEADERS to avoid bot detection)
-  const res1 = await fetch(url);
+  // First fetch to get cookies and tokens
+  const res1 = await fetch(url, {
+    headers: {
+      'User-Agent': USER_AGENT
+    }
+  });
 
   if (!res1.ok) {
     throw new Error(`Failed to fetch page first time (${res1.status} ${res1.statusText})`);
@@ -103,6 +115,7 @@ async function crawlTikTok(url: string): Promise<TikTokData> {
   // Second fetch with cookies to get the real HTML
   const res2 = await fetch(url, {
     headers: {
+      'User-Agent': USER_AGENT,
       'Cookie': cookieString
     },
   });
@@ -188,7 +201,11 @@ async function crawlTikTok(url: string): Promise<TikTokData> {
     id: itemStruct.id ?? null,
     description: itemStruct.desc ?? null,
     thumbnail: video?.cover ?? null,
-    tokens: { msToken: msToken ?? null, ttChainToken: ttChainToken ?? null },
+    tokens: { 
+      msToken: msToken ?? null, 
+      ttChainToken: ttChainToken ?? null,
+      cookieString: cookieString 
+    },
     resolutions
   };
 }
@@ -497,7 +514,8 @@ async function handleM3U8Download(url: string): Promise<void> {
   finalTitle = title;
 
   const dest = path.join(process.cwd(), `${finalTitle.replace(/[^a-z0-9]/gi, '_')}.mp4`);
-  const tempDir = path.join(process.cwd(), `temp_${Date.now()}`);
+  const tempDir = path.join(process.cwd(), `.dlx_temp_${Date.now()}`);
+  activeTempDir = tempDir;
   await fs.ensureDir(tempDir);
 
   try {
@@ -632,9 +650,14 @@ async function handleM3U8Download(url: string): Promise<void> {
     await fs.remove(tempDir);
     console.log(chalk.dim("Done."));
 
+    console.log(chalk.dim("Done."));
+
   } catch (err) {
-    await fs.remove(tempDir);
+    if (fs.existsSync(tempDir)) await fs.remove(tempDir);
     throw err;
+  } finally {
+    if (fs.existsSync(tempDir)) await fs.remove(tempDir);
+    activeTempDir = null;
   }
 }
 
@@ -789,7 +812,12 @@ function cleanFbUrl(url: string | null | undefined) {
 
 function decodeFbUnicode(str: string | null | undefined) {
     if (!str) return str;
-    return str.replace(/\\u([a-fA-F0-9]{4})/g, (match, grp) => String.fromCharCode(parseInt(grp, 16)));
+    let decoded = str.replace(/\\u([a-fA-F0-9]{4})/g, (match, grp) => String.fromCharCode(parseInt(grp, 16)));
+    // Decode hexadecimal HTML entities
+    decoded = decoded.replace(/&#x([a-fA-F0-9]+);/ig, (match, grp) => String.fromCharCode(parseInt(grp, 16)));
+    // Decode decimal HTML entities
+    decoded = decoded.replace(/&#(\d+);/g, (match, grp) => String.fromCharCode(parseInt(grp, 10)));
+    return decoded;
 }
 
 async function crawlFacebook(url: string): Promise<FacebookData> {
@@ -935,10 +963,23 @@ async function crawlFacebook(url: string): Promise<FacebookData> {
         }
     }
 
-    const title = metadata.title || metadata.description || `Facebook Video ${targetVideoId}`;
+    const titleMatchHtml = content.match(/<title>([\s\S]*?)<\/title>/i);
+    const htmlTitle = titleMatchHtml && titleMatchHtml[1] ? titleMatchHtml[1].trim().replace(/\s*[|\-]\s*Facebook\s*$/i, '') : null;
+
+    const metaTitleMatch = content.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
+    const metaTitle = metaTitleMatch && metaTitleMatch[1] ? decodeFbUnicode(metaTitleMatch[1]) : null;
+
+    const metaDescMatch = content.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i);
+    const metaDesc = metaDescMatch && metaDescMatch[1] ? decodeFbUnicode(metaDescMatch[1]) : null;
+
+    let finalTitle = metadata.description || metaDesc || metadata.title || metaTitle || htmlTitle || `Facebook Video ${targetVideoId}`;
+    
+    // Clean up title if it contains HTML entities like &quot;
+    finalTitle = finalTitle.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+
     const result: FacebookData = {
         id: targetVideoId,
-        title: title,
+        title: finalTitle,
         thumbnail: metadata.thumbnail_url || '',
         resolutions: parsedResolutions
     };
@@ -947,6 +988,169 @@ async function crawlFacebook(url: string): Promise<FacebookData> {
 }
 
 
+
+function getUniqueFilename(filename: string): string {
+  const ext = path.extname(filename);
+  const base = path.basename(filename, ext);
+  const dir = path.dirname(filename);
+  let finalPath = filename;
+  let counter = 1;
+
+  while (fs.existsSync(finalPath)) {
+    finalPath = path.join(dir, `${base} (${counter})${ext}`);
+    counter++;
+  }
+  return finalPath;
+}
+
+function sanitizeFilename(name: string): string {
+  return name
+    .replace(/[<>:"/\\|?*\n\r]/g, '')
+    .replace(/\s+/g, '_')
+    .substring(0, 100)
+    .replace(/_{2,}/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+async function downloadWithProgress(url: string, outputPath: string, headers: Record<string, string> = {}): Promise<void> {
+  const response = await axios({
+    url,
+    method: 'GET',
+    headers: {
+      'User-Agent': USER_AGENT,
+      ...headers
+    },
+    responseType: 'stream'
+  });
+
+  const totalLength = response.headers['content-length'];
+  const writer = fs.createWriteStream(outputPath);
+
+  const progressBar = new cliProgress.SingleBar({
+    format: 'Progress |' + chalk.green('{bar}') + '| {percentage}% | {value_formatted}/{total_formatted} | Speed: {speed}',
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591',
+    hideCursor: true
+  }, cliProgress.Presets.shades_classic);
+
+  let downloadedBytes = 0;
+  const totalBytes = totalLength ? parseInt(String(totalLength), 10) : 0;
+
+  if (totalBytes > 0) {
+    progressBar.start(totalBytes, 0, {
+      speed: '0 B/s',
+      value_formatted: formatBytes(0),
+      total_formatted: formatBytes(totalBytes)
+    });
+  }
+
+  let lastUpdate = Date.now();
+  let lastBytes = 0;
+  let speed = 0;
+
+  response.data.on('data', (chunk: Buffer) => {
+    downloadedBytes += chunk.length;
+    const now = Date.now();
+    const elapsed = (now - lastUpdate) / 1000;
+    if (elapsed >= 0.5) {
+      speed = (downloadedBytes - lastBytes) / elapsed;
+      lastUpdate = now;
+      lastBytes = downloadedBytes;
+    }
+
+    if (totalBytes > 0) {
+      progressBar.update(downloadedBytes, {
+        speed: `${formatBytes(speed)}/s`,
+        value_formatted: formatBytes(downloadedBytes),
+        total_formatted: formatBytes(totalBytes)
+      });
+    }
+  });
+
+  await pipeline(response.data, writer);
+  if (totalBytes > 0) progressBar.stop();
+}
+
+async function muxFiles(videoPath: string, audioPath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+      '-y',
+      '-i', videoPath,
+      '-i', audioPath,
+      '-c:v', 'copy',
+      '-c:a', 'aac',
+      '-strict', 'experimental',
+      outputPath
+    ]);
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FFmpeg exited with code ${code}`));
+    });
+
+    ffmpeg.on('error', reject);
+  });
+}
+
+async function extractAudio(videoPath: string, outputPath: string, format: string): Promise<void> {
+  const audioCodec = format === 'mp3' ? 'libmp3lame' : 'aac';
+  const extraArgs = format === 'mp3' ? ['-q:a', '2'] : [];
+
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+      '-y',
+      '-i', videoPath,
+      '-vn',
+      '-c:a', audioCodec,
+      ...extraArgs,
+      outputPath
+    ]);
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FFmpeg exited with code ${code}`));
+    });
+
+    ffmpeg.on('error', reject);
+  });
+}
+
+async function extractVideo(videoPath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+      '-y',
+      '-i', videoPath,
+      '-an',
+      '-c:v', 'copy',
+      outputPath
+    ]);
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FFmpeg exited with code ${code}`));
+    });
+
+    ffmpeg.on('error', reject);
+  });
+}
+
+async function convertFormat(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+      '-y',
+      '-i', inputPath,
+      '-c', 'copy', // Copy both audio and video streams into new container
+      outputPath
+    ]);
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FFmpeg exited with code ${code}`));
+    });
+
+    ffmpeg.on('error', reject);
+  });
+}
 
 async function main() {
   // Clear the console for a clean start
@@ -979,11 +1183,54 @@ async function main() {
 
     let url = answers.url;
     let filename = '';
-    let tiktokTokens: { msToken: string | null; ttChainToken: string | null } | null = null;
+    let tiktokTokens: { msToken: string | null; ttChainToken: string | null; cookieString?: string } | null = null;
     let isYouTube = false;
     let audioUrlToMux = '';
+    let downloadType = 'complete';
+    let outputFormat = 'mp4';
 
     const urlObj = new URL(url);
+
+    if (
+      urlObj.hostname.includes('tiktok.com') ||
+      urlObj.hostname.includes('youtube.com') ||
+      urlObj.hostname.includes('youtu.be') ||
+      urlObj.hostname.includes('facebook.com') ||
+      urlObj.hostname.includes('fb.watch')
+    ) {
+      const typeChoice = await inquirer.prompt([
+        {
+          type: 'select',
+          name: 'downloadType',
+          message: 'Select download type:',
+          choices: [
+            { name: 'Complete Video (Video + Audio)', value: 'complete' },
+            { name: 'Video Only (No Audio)', value: 'video' },
+            { name: 'Audio Only', value: 'audio' },
+          ],
+        },
+      ]);
+      downloadType = typeChoice.downloadType;
+
+      const formatChoice = await inquirer.prompt([
+        {
+          type: 'select',
+          name: 'format',
+          message: 'Select output format:',
+          choices: downloadType === 'audio' 
+            ? [
+                { name: 'M4A (Default, best quality)', value: 'm4a' },
+                { name: 'MP3 (Most compatible)', value: 'mp3' },
+              ]
+            : [
+                { name: 'MP4 (Default, most compatible)', value: 'mp4' },
+                { name: 'MKV (Better for large files)', value: 'mkv' },
+              ],
+        },
+      ]);
+      outputFormat = formatChoice.format;
+    }
+
     if (urlObj.hostname.includes('tiktok.com')) {
       console.log(chalk.yellow('\nCrawling TikTok video...'));
       try {
@@ -996,25 +1243,29 @@ async function main() {
         console.log(chalk.green(`\nFound: ${chalk.white(tiktokData.description || 'Untitled Video')}`));
         console.log(chalk.gray(`Available Qualities: ${tiktokData.resolutions.length}\n`));
 
-        const choice = await inquirer.prompt([
-          {
-            type: 'select',
-            name: 'resolution',
-            message: 'Select quality to download:',
-            pageSize: 10,
-            choices: tiktokData.resolutions.map((res) => ({
-              name: `${chalk.bold(res.qualityLabel || 'Unknown')} - ${chalk.cyan(res.codec || 'N/A')} - ${chalk.yellow(res.bitrate ? (res.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A')} - ${chalk.green(res.sizeFormatted)}`,
-              value: res
-            })),
-          },
-        ]);
-
-        url = choice.resolution.url;
-        
-        // Robust filename: Description (max 50 chars) -> fallback to ID
-        const cleanDescription = (tiktokData.description || '').replace(/[^a-z0-9]/gi, '_').substring(0, 50).replace(/_{2,}/g, '_').replace(/^_|_$/g, '');
-        const baseName = cleanDescription || tiktokData.id || `tiktok_${Date.now()}`;
-        filename = `${baseName}_${choice.resolution.qualityLabel}.mp4`;
+        if (downloadType === 'audio') {
+          url = tiktokData.resolutions[0]?.url || '';
+          const cleanDescription = sanitizeFilename(tiktokData.description || '');
+          const baseName = cleanDescription || tiktokData.id || `tiktok_${Date.now()}`;
+          filename = `${baseName}.${outputFormat}`;
+        } else {
+          const choice = await inquirer.prompt([
+            {
+              type: 'select',
+              name: 'resolution',
+              message: 'Select quality to download:',
+              pageSize: 10,
+              choices: tiktokData.resolutions.map((res) => ({
+                name: `${chalk.bold(res.qualityLabel || 'Unknown')} - ${chalk.cyan(res.codec || 'N/A')} - ${chalk.yellow(res.bitrate ? (res.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A')} - ${chalk.green(res.sizeFormatted)}`,
+                value: res
+              })),
+            },
+          ]);
+          url = choice.resolution.url;
+          const cleanDescription = sanitizeFilename(tiktokData.description || '');
+          const baseName = cleanDescription || tiktokData.id || `tiktok_${Date.now()}`;
+          filename = `${baseName}_${choice.resolution.qualityLabel}.${outputFormat}`;
+        }
       } catch (err) {
         console.error(chalk.red(`\nError crawling TikTok: ${err instanceof Error ? err.message : String(err)}`));
         return;
@@ -1034,29 +1285,36 @@ async function main() {
         console.log(chalk.green(`\nFound: ${chalk.white(ytData.title)}`));
         console.log(chalk.gray(`Available Qualities: ${ytData.resolutions.length}\n`));
 
-        const choice = await inquirer.prompt([
-          {
-            type: 'select',
-            name: 'resolution',
-            message: 'Select YouTube quality:',
-            pageSize: 10,
-            choices: ytData.resolutions.map((res) => ({
-              name: `${chalk.bold(res.qualityLabel)} - ${chalk.cyan(res.codec)} - ${chalk.yellow((res.bitrate / 1000).toFixed(0) + ' kbps')} - ${chalk.green(res.sizeFormatted)}`,
-              value: res
-            })),
-          },
-        ]);
+        if (downloadType === 'audio') {
+          console.log(chalk.blue('Fetching best audio stream...'));
+          url = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData);
+          const cleanTitle = sanitizeFilename(ytData.title);
+          filename = `${cleanTitle}.${outputFormat}`;
+        } else {
+          const choice = await inquirer.prompt([
+            {
+              type: 'select',
+              name: 'resolution',
+              message: 'Select YouTube quality:',
+              pageSize: 10,
+              choices: ytData.resolutions.map((res) => ({
+                name: `${chalk.bold(res.qualityLabel)} - ${chalk.cyan(res.codec)} - ${chalk.yellow((res.bitrate / 1000).toFixed(0) + ' kbps')} - ${chalk.green(res.sizeFormatted)}`,
+                value: res
+              })),
+            },
+          ]);
 
-        url = choice.resolution.url;
-        const selectedRes = choice.resolution as YouTubeResolution;
+          url = choice.resolution.url;
+          const selectedRes = choice.resolution as YouTubeResolution;
 
-        if (selectedRes.isAdaptive) {
-          console.log(chalk.blue('Adaptive quality selected. Fetching audio stream...'));
-          audioUrlToMux = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData);
+          if (selectedRes.isAdaptive && downloadType === 'complete') {
+            console.log(chalk.blue('Adaptive quality selected. Fetching audio stream...'));
+            audioUrlToMux = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData);
+          }
+
+          const cleanTitle = sanitizeFilename(ytData.title);
+          filename = `${cleanTitle}_${selectedRes.qualityLabel.split(' ')[0]}.${outputFormat}`;
         }
-
-        const cleanTitle = ytData.title.replace(/[^a-z0-9]/gi, '_').substring(0, 50).replace(/_{2,}/g, '_').replace(/^_|_$/g, '');
-        filename = `${cleanTitle}_${selectedRes.qualityLabel.split(' ')[0]}.mp4`;
       } catch (err) {
         console.error(chalk.red(`\nError crawling YouTube: ${err instanceof Error ? err.message : String(err)}`));
         return;
@@ -1072,26 +1330,36 @@ async function main() {
         console.log(chalk.green(`\nFound: ${chalk.white(fbData.title)}`));
         console.log(chalk.gray(`Available Qualities: ${fbData.resolutions.length}\n`));
 
-        const choice = await inquirer.prompt([
-          {
-            type: 'select',
-            name: 'resolution',
-            message: 'Select Facebook quality:',
-            pageSize: 10,
-            choices: fbData.resolutions.map((res) => ({
-              name: `${chalk.bold(res.quality)} - ${chalk.cyan(res.format.toUpperCase())} - ${chalk.yellow(res.bitrate ? (res.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A')}`,
-              value: res
-            })),
-          },
-        ]);
+        if (downloadType === 'audio') {
+          if (fbData.audio) {
+            url = fbData.audio.url;
+          } else {
+            url = fbData.resolutions[0]?.url || ''; // Progressive video fallback
+          }
+          const cleanTitle = sanitizeFilename(fbData.title);
+          filename = `${cleanTitle}.${outputFormat}`;
+        } else {
+          const choice = await inquirer.prompt([
+            {
+              type: 'select',
+              name: 'resolution',
+              message: 'Select Facebook quality:',
+              pageSize: 10,
+              choices: fbData.resolutions.map((res) => ({
+                name: `${chalk.bold(res.quality)} - ${chalk.cyan(res.format.toUpperCase())} - ${chalk.yellow(res.bitrate ? (res.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A')}`,
+                value: res
+              })),
+            },
+          ]);
 
-        url = choice.resolution.url;
-        if (fbData.audio) {
-           console.log(chalk.blue('Separate audio stream detected. Will mux with video.'));
-           audioUrlToMux = fbData.audio.url;
+          url = choice.resolution.url;
+          if (fbData.audio && downloadType === 'complete') {
+             console.log(chalk.blue('Separate audio stream detected. Will mux with video.'));
+             audioUrlToMux = fbData.audio.url;
+          }
+          const cleanTitle = sanitizeFilename(fbData.title);
+          filename = `${cleanTitle}_${choice.resolution.quality}.${outputFormat}`;
         }
-        const cleanTitle = fbData.title.replace(/[^a-z0-9]/gi, '_').substring(0, 50).replace(/_{2,}/g, '_').replace(/^_|_$/g, '');
-        filename = `${cleanTitle}_${choice.resolution.quality}.${choice.resolution.format}`;
       } catch (err) {
         console.error(chalk.red(`\nError crawling Facebook: ${err instanceof Error ? err.message : String(err)}`));
         return;
@@ -1103,6 +1371,129 @@ async function main() {
       console.log(chalk.yellow('[!] Platform not specifically recognized. Attempting generic download...'));
       await handleGenericDownload(url);
       return;
+    }
+
+    // Final download step for TikTok, YouTube, and Facebook
+    if (url && filename) {
+      const finalFilename = getUniqueFilename(filename);
+      const headers: Record<string, string> = {};
+      
+      if (tiktokTokens) {
+        if (tiktokTokens.cookieString) {
+          headers['Cookie'] = tiktokTokens.cookieString;
+        } else {
+          const parts: string[] = [];
+          if (tiktokTokens.msToken) parts.push(`msToken=${tiktokTokens.msToken}`);
+          if (tiktokTokens.ttChainToken) parts.push(`tt_chain_token=${tiktokTokens.ttChainToken}`);
+          headers['Cookie'] = parts.join('; ');
+        }
+        headers['Referer'] = 'https://www.tiktok.com/';
+      }
+
+      if (audioUrlToMux) {
+        const tempDir = path.join(process.cwd(), `.dlx_temp_${Date.now()}`);
+        activeTempDir = tempDir;
+        await fs.ensureDir(tempDir);
+        
+        const videoTempPath = path.join(tempDir, 'video.mp4');
+        const audioTempPath = path.join(tempDir, 'audio.m4a');
+        
+        try {
+          console.log(chalk.blue('\n📥 Downloading video stream...'));
+          await downloadWithProgress(url, videoTempPath, headers);
+          
+          console.log(chalk.blue('\n📥 Downloading audio stream...'));
+          await downloadWithProgress(audioUrlToMux, audioTempPath);
+          
+          console.log(chalk.yellow('\n🎬 Muxing video and audio...'));
+          await muxFiles(videoTempPath, audioTempPath, finalFilename);
+          
+          console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+        } finally {
+          if (fs.existsSync(tempDir)) await fs.remove(tempDir);
+          activeTempDir = null;
+        }
+      } else {
+        if (downloadType === 'video' || downloadType === 'audio') {
+          // If we need to extract/strip from a progressive video (where audioUrlToMux is empty)
+          const isAudioOnly = downloadType === 'audio';
+          // Note: for YouTube and Facebook audio-only with separate streams, we just download the audio stream directly (so it acts like a normal download)
+          // But if we downloaded a progressive video to get audio/video only, we use temp files and extract.
+          // Wait, for YouTube, audio is already M4A if we just get the audio URL.
+          // For Facebook audio, it's also M4A.
+          // Only TikTok needs extraction if we want audio/video only because it's purely progressive.
+          // So let's check if we actually need extraction.
+          // For video only on progressive, we strip audio. For audio only on progressive, we extract audio.
+          // We can determine if it's progressive and needs extraction if `audioUrlToMux` is empty but the downloadType is not complete.
+          // BUT wait, YouTube adaptive video stream has NO audio. If downloadType='video', audioUrlToMux is empty, it's already video only!
+          // So running extractVideo on it is redundant but safe.
+          // Let's just always do extraction if downloadType !== 'complete' to be safe.
+          
+          const tempDir = path.join(process.cwd(), `.dlx_temp_${Date.now()}`);
+          activeTempDir = tempDir;
+          await fs.ensureDir(tempDir);
+          const tempPath = path.join(tempDir, `temp_download${path.extname(finalFilename)}`);
+          
+          try {
+            console.log(chalk.blue('\n📥 Downloading stream...'));
+            await downloadWithProgress(url, tempPath, headers);
+          } catch (e: any) {
+            if (fs.existsSync(tempDir)) await fs.remove(tempDir);
+            activeTempDir = null;
+            throw e;
+          }
+          
+          try {
+            console.log(chalk.yellow(`\n🎬 Processing ${isAudioOnly ? 'audio' : 'video'} only...`));
+            if (isAudioOnly) {
+              await extractAudio(tempPath, finalFilename, outputFormat);
+            } else {
+              await extractVideo(tempPath, finalFilename);
+            }
+            console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+          } catch (e: any) {
+             console.log(chalk.yellow(`\n⚠️ FFmpeg processing skipped or failed: ${e.message}. Saving as is...`));
+             await fs.copy(tempPath, finalFilename);
+             console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+          } finally {
+            if (fs.existsSync(tempDir)) await fs.remove(tempDir);
+            activeTempDir = null;
+          }
+        } else {
+          // If we requested a non-MP4 format but it's a direct progressive download, convert container
+          if (outputFormat !== 'mp4') {
+            const tempDir = path.join(process.cwd(), `.dlx_temp_${Date.now()}`);
+            activeTempDir = tempDir;
+            await fs.ensureDir(tempDir);
+            const tempPath = path.join(tempDir, `temp_download.mp4`);
+            try {
+              console.log(chalk.blue('\n📥 Downloading stream...'));
+              await downloadWithProgress(url, tempPath, headers);
+            } catch (e: any) {
+              if (fs.existsSync(tempDir)) await fs.remove(tempDir);
+              activeTempDir = null;
+              throw e;
+            }
+            
+            try {
+              console.log(chalk.yellow(`\n🎬 Converting to ${outputFormat.toUpperCase()} container...`));
+              await convertFormat(tempPath, finalFilename);
+              console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+            } catch (e: any) {
+              console.log(chalk.yellow(`\n⚠️ FFmpeg container conversion failed: ${e.message}. Saving as is...`));
+              await fs.copy(tempPath, finalFilename);
+              console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+            } finally {
+              if (fs.existsSync(tempDir)) await fs.remove(tempDir);
+              activeTempDir = null;
+            }
+          } else {
+            console.log(chalk.blue('\n📥 Starting download...'));
+            await downloadWithProgress(url, finalFilename, headers);
+            console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+          }
+        }
+      }
     }
   } catch (error: any) {
     console.error(chalk.red('\n✖ Error occurred during download:'));
