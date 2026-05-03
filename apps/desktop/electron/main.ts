@@ -263,8 +263,13 @@ function createWindow() {
     show: false,
     autoHideMenuBar: true,
     center: true,
-    title: "Flux",
-    frame: false,
+    title: "DLX - Nextgen Downloader",
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: 'rgba(0,0,0,0)',
+      symbolColor: '#71717a', // Neutral zinc color
+      height: 32
+    },
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
@@ -444,8 +449,13 @@ function createDownloaderWindow(payload: {
     show: false,
     autoHideMenuBar: true,
     center: true,
-    title: "Flux Downloader",
-    frame: false,
+    title: "DLX Downloader",
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: 'rgba(0,0,0,0)',
+      symbolColor: '#71717a', // Neutral zinc color
+      height: 32
+    },
     icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),

@@ -375,44 +375,10 @@ export function DownloaderApp() {
 
   return (
     <div className="flex h-screen w-screen flex-col items-center gap-4 bg-background p-0 text-sm select-none">
-      <header className="flex w-full items-center justify-between border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide drag-css">
-        <span className="truncate">{title || filename || "Download File"}</span>
-        <div className="flex items-center gap-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-base no-drag-css"
-            onClick={() => {
-              if (window?.ipcRenderer) {
-                window.ipcRenderer.invoke("window-minimize");
-              }
-            }}
-          >
-            ─<span className="sr-only">Minimize</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-base no-drag-css"
-            onClick={async () => {
-              if (window?.ipcRenderer) {
-                // If download is in progress, cancel it first
-                if (isDownloading) {
-                  try {
-                    await window.ipcRenderer.invoke("cancel-download");
-                  } catch (error) {
-                    console.error("Error cancelling download:", error);
-                  }
-                }
-                // Close the window
-                window.ipcRenderer.invoke("window-close");
-              }
-            }}
-          >
-            ×<span className="sr-only">Close</span>
-          </Button>
+      <header className="flex w-full h-[32px] shrink-0 items-center justify-between bg-background px-4 py-2 text-xs font-semibold tracking-wide drag-css">
+        <div className="flex items-center gap-2">
+          <img src="/icons/png/32x32.png" alt="Logo" className="w-4 h-4" />
+          <span className="truncate">{title || filename || "DLX Downloader"}</span>
         </div>
       </header>
       <div className="w-full max-w-lg space-y-1.5">
