@@ -270,6 +270,7 @@ interface YouTubeData {
   cookies?: string;
   sts?: number;
   sapiHash?: string;
+  masterUrl?: string;
 }
 
 class YouTubeCookieJar {
@@ -526,7 +527,7 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
             });
             // If we found HLS formats, we return them and SKIP dash formats
             if (resolutions.length > 0) {
-               return { id: videoId, title, description, thumbnail, resolutions, apiKey, visitorData, cookies: currentCookies, sts, sapiHash };
+               return { id: videoId, title, description, thumbnail, resolutions, apiKey, visitorData, cookies: currentCookies, sts, sapiHash, masterUrl: streamingData.hlsManifestUrl };
             }
         }
     }
@@ -609,209 +610,171 @@ async function getBestYouTubeAudio(videoId: string, apiKey: string, visitorData:
   throw new Error("Could not find audio stream for YouTube video.");
 }
 
-async function handleM3U8Download(url: string): Promise<void> {
-  // 1. Ask for headers file
-  const { headersPath } = await inquirer.prompt([{
-    type: 'input',
-    name: 'headersPath',
-    message: 'Path to headers JSON file (press Enter to check root "headers.json"):',
-    validate: (input: string) => {
-        if (!input) return true;
-        return fs.existsSync(input) ? true : 'File does not exist.';
-    }
-  }]);
-
-  let customHeaders: Record<string, string> = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  };
-
-  const finalHeadersPath = headersPath || (fs.existsSync('headers.json') ? 'headers.json' : null);
-  
-  if (finalHeadersPath) {
-    try {
-      console.log(chalk.gray(`[*] Loading headers from ${finalHeadersPath}...`));
-      const headersContent = await fs.readFile(finalHeadersPath, 'utf8');
-      const parsed = JSON.parse(headersContent);
-      customHeaders = { ...customHeaders, ...parsed };
-    } catch (e) {
-      console.log(chalk.yellow(`[!] Warning: Failed to parse headers file (${e instanceof Error ? e.message : String(e)}). Using defaults.`));
-    }
-  } else {
-    console.log(chalk.gray('[*] No headers file provided. Using default browser headers.'));
-  }
-
-  console.log(chalk.yellow('\n[*] Analyzing M3U8 manifest...'));
-  
-  const formats = await parseHlsManifest(url, customHeaders);
-  
-  let downloadUrl = url;
-  let finalTitle = '';
-
-  if (formats.length > 0) {
-    console.log(chalk.green(`\n[+] Master Playlist detected with ${formats.length} streams.`));
-    const { selectedFormat } = await inquirer.prompt([{
-      type: 'select',
-      name: 'selectedFormat',
-      message: 'Select stream quality:',
-      choices: formats.sort((a, b) => b.height - a.height).map(f => ({ name: f.name, value: f }))
-    }]);
-    downloadUrl = selectedFormat.url;
-  } else {
-    console.log(chalk.cyan('\n[*] Media Playlist detected (single stream).'));
-  }
-
-  const { title } = await inquirer.prompt([{
-    type: 'input',
-    name: 'title',
-    message: 'Enter video title (optional, leave empty for default):',
-    default: `hls_download_${Date.now()}`
-  }]);
-  finalTitle = title;
-
-  const dest = path.join(process.cwd(), `${finalTitle.replace(/[^a-z0-9]/gi, '_')}.mp4`);
+async function handleM3U8Download(url: string, dest: string, options: { headers?: Record<string, string>, audioUrl?: string | undefined, title?: string | undefined } = {}): Promise<void> {
+  const absoluteDest = path.isAbsolute(dest) ? dest : path.resolve(process.cwd(), dest);
+  const { headers: customHeaders = {}, audioUrl, title } = options;
+  const finalTitle = title || `hls_download_${Date.now()}`;
   const tempDir = path.join(process.cwd(), `.dlx_temp_${Date.now()}`);
   activeTempDir = tempDir;
   await fs.ensureDir(tempDir);
 
   try {
-    console.log(chalk.blue("\n📥 Fetching media playlist..."));
-    const response = await axios.get(downloadUrl, { headers: customHeaders });
-    const playlistContent = response.data;
-    const lines = playlistContent.split('\n');
+    async function downloadPlaylist(playlistUrl: string, prefix: string): Promise<{ lines: string[], baseUrl: string }> {
+      console.log(chalk.blue(`\n📥 Fetching ${prefix} playlist...`));
+      const response = await axios.get(playlistUrl, { headers: customHeaders });
+      const content = response.data as string;
+      if (!content || typeof content !== 'string') {
+          throw new Error(`Failed to fetch playlist content for ${prefix}`);
+      }
+      const lines = content.split('\n');
+      const urlWithoutQuery = playlistUrl.split('?')[0] || '';
+      const baseUrl = urlWithoutQuery.substring(0, urlWithoutQuery.lastIndexOf('/') + 1);
+      
+      const segments: Map<number, string> = new Map();
+      let totalSegments = 0;
+      for (const line of lines) {
+        if (line.trim() && !line.startsWith('#')) {
+          segments.set(totalSegments++, line.trim());
+        }
+      }
 
-    // Handle AES-128 Key
-    const keyMatch = playlistContent.match(/#EXT-X-KEY:METHOD=AES-128,URI="([^"]+)"/);
-    if (keyMatch) {
-        console.log(chalk.yellow("🔑 Detected AES-128 encryption. Fetching key..."));
-        const keyUri = keyMatch[1];
-        const keyUrl = keyUri.startsWith('http') ? keyUri : new URL(keyUri, downloadUrl).href;
-        const keyData = await axios.get(keyUrl, { headers: customHeaders, responseType: 'arraybuffer' });
-        await fs.writeFile(path.join(tempDir, 'video.key'), Buffer.from(keyData.data));
-        console.log(chalk.green("✅ Decryption key saved."));
-    }
-
-    const segments = lines.filter((line: string) => line.trim() && !line.startsWith('#'));
-    const totalSegments = segments.length;
-    const baseUrl = downloadUrl.substring(0, downloadUrl.lastIndexOf('/') + 1);
-
-    console.log(chalk.blue(`✅ Found ${totalSegments} segments. Starting parallel download...\n`));
-
-    const progressBar = new cliProgress.SingleBar({
-        format: chalk.cyan('💎 Progress |') + chalk.green('{bar}') + '| {percentage}% | {value}/{total} Segments | Speed: {speed} | Size: {size}',
+      console.log(chalk.yellow(`[*] Downloading ${totalSegments} segments for ${prefix}...`));
+      
+      const progressBar = new cliProgress.SingleBar({
+        format: chalk.cyan(`💎 ${prefix} Progress |`) + chalk.green('{bar}') + '| {percentage}% | {value}/{total} Segments | Speed: {speed} | Size: {size}',
         barCompleteChar: '\u2588',
         barIncompleteChar: '\u2591',
         hideCursor: true
-    }, cliProgress.Presets.shades_classic);
+      }, cliProgress.Presets.shades_classic);
 
-    let completed = 0;
-    let totalBytes = 0;
-    let lastUpdate = Date.now();
-    let lastBytes = 0;
-    let speedFormatted = '0 B/s';
+      let completed = 0;
+      let totalBytes = 0;
+      let lastUpdate = Date.now();
+      let lastBytes = 0;
+      let speedFormatted = '0 B/s';
 
-    progressBar.start(totalSegments, 0, { speed: '0 B/s', size: '0 B' });
+      progressBar.start(totalSegments, 0, { speed: '0 B/s', size: '0 B' });
 
-    const CONCURRENCY = 15;
-    const queue = [...segments.entries()];
-    
-    async function worker() {
+      const CONCURRENCY = 15;
+      const queue = [...segments.entries()];
+      
+      async function worker() {
         while (queue.length > 0) {
-            const item = queue.shift();
-            if (!item) break;
-            const [index, segmentName] = item;
-            const segmentUrl = segmentName.startsWith('http') ? segmentName : new URL(segmentName, baseUrl).href;
-            const segmentPath = path.join(tempDir, `${index.toString().padStart(5, '0')}.ts`);
-            
-            let retries = 3;
-            while (retries > 0) {
-                try {
-                    const res = await axios.get(segmentUrl, { 
-                        headers: customHeaders, 
-                        responseType: 'arraybuffer',
-                        timeout: 30000 
-                    });
-                    const buffer = Buffer.from(res.data);
-                    await fs.writeFile(segmentPath, buffer);
-                    
-                    completed++;
-                    totalBytes += buffer.length;
-                    
-                    const now = Date.now();
-                    const elapsed = (now - lastUpdate) / 1000;
-                    if (elapsed >= 0.5) {
-                        const speed = (totalBytes - lastBytes) / elapsed;
-                        speedFormatted = `${formatBytes(speed)}/s`;
-                        lastUpdate = now;
-                        lastBytes = totalBytes;
-                    }
+          const item = queue.shift();
+          if (!item) break;
+          const [index, segmentName] = item;
+          const segmentUrl = segmentName.startsWith('http') ? segmentName : new URL(segmentName, playlistUrl).href;
+          const segmentPath = path.join(tempDir, `${prefix}_${index.toString().padStart(5, '0')}.ts`);
+          
+          let retries = 3;
+          while (retries > 0) {
+            try {
+              const res = await axios.get(segmentUrl, { 
+                headers: customHeaders, 
+                responseType: 'arraybuffer',
+                timeout: 30000 
+              });
+              const buffer = Buffer.from(res.data);
+              await fs.writeFile(segmentPath, buffer);
+              
+              completed++;
+              totalBytes += buffer.length;
+              
+              const now = Date.now();
+              const elapsed = (now - lastUpdate) / 1000;
+              if (elapsed >= 0.5) {
+                const speed = (totalBytes - lastBytes) / elapsed;
+                speedFormatted = `${formatBytes(speed)}/s`;
+                lastUpdate = now;
+                lastBytes = totalBytes;
+              }
 
-                    progressBar.update(completed, {
-                        speed: speedFormatted,
-                        size: formatBytes(totalBytes)
-                    });
-                    break;
-                } catch (err) {
-                    retries--;
-                    if (retries === 0) {
-                        console.error(chalk.red(`\n❌ Failed segment ${index}: ${err instanceof Error ? err.message : String(err)}`));
-                    }
-                }
+              progressBar.update(completed, {
+                speed: speedFormatted,
+                size: formatBytes(totalBytes)
+              });
+              break;
+            } catch (err) {
+              retries--;
+              if (retries === 0) {
+                console.error(chalk.red(`\n❌ Failed ${prefix} segment ${index}: ${err instanceof Error ? err.message : String(err)}`));
+              }
             }
+          }
         }
+      }
+
+      await Promise.all(Array(CONCURRENCY).fill(0).map(() => worker()));
+      progressBar.stop();
+      return { lines, baseUrl };
     }
 
-    await Promise.all(Array(CONCURRENCY).fill(0).map(() => worker()));
-    progressBar.stop();
-
-    console.log(chalk.green("\n📦 Download complete. Preparing local playlist..."));
-
-    // Generate Local m3u8
-    const localM3u8Path = path.join(tempDir, 'local.m3u8');
-    let localM3u8Content = "";
-    let segmentIndex = 0;
-
-    for (const line of lines) {
-        if (line.startsWith('#EXT-X-KEY')) {
-            localM3u8Content += `#EXT-X-KEY:METHOD=AES-128,URI="video.key"\n`;
-        } else if (line.trim() && !line.startsWith('#')) {
-            localM3u8Content += `${segmentIndex.toString().padStart(5, '0')}.ts\n`;
-            segmentIndex++;
-        } else {
-            localM3u8Content += line + "\n";
-        }
+    const videoData = await downloadPlaylist(url, 'Video');
+    let audioData: { lines: string[], baseUrl: string } | null = null;
+    if (audioUrl) {
+      audioData = await downloadPlaylist(audioUrl, 'Audio');
     }
-    await fs.writeFile(localM3u8Path, localM3u8Content);
+
+    console.log(chalk.green("\n📦 Download complete. Preparing local playlists..."));
+
+    // Generate Local m3u8s
+    const localVideoM3u8Path = path.join(tempDir, 'video.m3u8');
+    let videoContent = "";
+    let vIdx = 0;
+    for (const line of videoData.lines) {
+      if (line.trim() && !line.startsWith('#')) videoContent += `Video_${(vIdx++).toString().padStart(5, '0')}.ts\n`;
+      else videoContent += line + "\n";
+    }
+    await fs.writeFile(localVideoM3u8Path, videoContent);
+
+    let ffmpegInputs = ['-i', 'video.m3u8'];
+    let ffmpegMaps = ['-map', '0:v:0'];
+
+    if (audioData) {
+      const localAudioM3u8Path = path.join(tempDir, 'audio.m3u8');
+      let audioContent = "";
+      let aIdx = 0;
+      for (const line of audioData.lines) {
+        if (line.trim() && !line.startsWith('#')) audioContent += `Audio_${(aIdx++).toString().padStart(5, '0')}.ts\n`;
+        else audioContent += line + "\n";
+      }
+      await fs.writeFile(localAudioM3u8Path, audioContent);
+      ffmpegInputs.push('-i', 'audio.m3u8');
+      ffmpegMaps.push('-map', '1:a:0');
+    }
+
+    let ffmpegArgs = [
+        '-y',
+        '-allowed_extensions', 'ALL',
+        ...ffmpegInputs,
+        '-c', 'copy'
+    ];
+
+    if (audioData) {
+        ffmpegArgs.push(...ffmpegMaps, '-bsf:a', 'aac_adtstoasc');
+    }
+
+    ffmpegArgs.push(absoluteDest);
 
     console.log(chalk.blue("🎬 Finalizing video (Merging)..."));
     
     await new Promise<void>((resolve, reject) => {
-        const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
-            '-y',
-            '-allowed_extensions', 'ALL',
-            '-i', 'local.m3u8',
-            '-c', 'copy',
-            '-bsf:a', 'aac_adtstoasc',
-            dest
-        ], { cwd: tempDir }) as any;
+        const ffmpeg = spawn(getFFmpegPath(), ffmpegArgs, { cwd: tempDir });
 
-        ffmpeg.on('close', (code: number | null) => {
+        ffmpeg.on('close', (code) => {
             if (code === 0) resolve();
             else reject(new Error(`FFmpeg exited with code ${code}`));
         });
+        ffmpeg.on('error', reject);
     });
 
-    console.log(chalk.green.bold(`\n🎉 SUCCESS! Full video saved to: ${path.basename(dest)}`));
-    console.log(chalk.dim("🧹 Cleaning up temporary files..."));
+    console.log(chalk.green.bold(`\n🎉 SUCCESS! Full video saved to: ${absoluteDest}`));
     await fs.remove(tempDir);
-    console.log(chalk.dim("Done."));
-
-    console.log(chalk.dim("Done."));
 
   } catch (err) {
     if (fs.existsSync(tempDir)) await fs.remove(tempDir);
     throw err;
   } finally {
-    if (fs.existsSync(tempDir)) await fs.remove(tempDir);
     activeTempDir = null;
   }
 }
@@ -1533,7 +1496,14 @@ async function main() {
         return;
       }
     } else if (url.toLowerCase().includes('.m3u8') || url.toLowerCase().includes('playlist')) {
-      await handleM3U8Download(url);
+      const { title } = await inquirer.prompt([{
+        type: 'input',
+        name: 'title',
+        message: 'Enter output filename (without extension):',
+        default: `hls_download_${Date.now()}`
+      }]);
+      const dest = path.join(process.cwd(), `${title.replace(/[^a-z0-9]/gi, '_')}.mp4`);
+      await handleM3U8Download(url, dest, { title });
       return;
     } else {
       console.log(chalk.yellow('[!] Platform not specifically recognized. Attempting generic download...'));
@@ -1562,62 +1532,15 @@ async function main() {
       }
 
       if (isYouTube && isHLS && ytDataRef) {
-         // Specialized HLS download for YouTube
-         const bestAudio = ytDataRef.resolutions.find(r => !r.isHLS && r.mimeType.includes('audio'))?.url;
+         // Use the master manifest URL to find audio tracks
+         const masterUrl = ytDataRef.masterUrl || url;
+         const hlsFormats = await parseHlsManifest(masterUrl, headers);
+         const audioTrack = hlsFormats.find(f => f.type === 'audio') || hlsFormats.find(f => f.hasAudio);
          
-         const headerLines = [
-            `User-Agent: ${USER_AGENT_IOS}`,
-            ytDataRef.cookies ? `Cookie: ${ytDataRef.cookies}` : null,
-            ytDataRef.sapiHash ? `Authorization: ${ytDataRef.sapiHash}` : null,
-            'X-Goog-AuthUser: 0',
-            'Origin: https://www.youtube.com',
-            `Referer: https://www.youtube.com/watch?v=${ytDataRef.id}`
-         ].filter(Boolean) as string[];
-         const headerStr = headerLines.join('\r\n') + '\r\n';
-
-         let ffmpegArgs = [
-            '-analyzeduration', '0',
-            '-probesize', '32',
-            '-http_persistent', '1',
-            '-threads', '0',
-            '-reconnect', '1',
-            '-reconnect_at_eof', '1',
-            '-reconnect_streamed', '1',
-            '-reconnect_delay_max', '2',
-            '-thread_queue_size', '4096',
-            '-headers', headerStr,
-            '-i', url
-         ];
-
-         if (bestAudio && downloadType === 'complete') {
-            console.log(chalk.cyan(`[*] Merging separate audio track...`));
-            ffmpegArgs.push('-thread_queue_size', '4096', '-headers', headerStr, '-i', bestAudio);
-            ffmpegArgs.push('-c:v', 'copy', '-c:a', outputFormat === 'mp3' ? 'libmp3lame' : 'aac', '-map', '0:v:0', '-map', '1:a:0');
-         } else if (downloadType === 'audio') {
-            ffmpegArgs.push('-vn');
-            if (outputFormat === 'mp3') ffmpegArgs.push('-c:a', 'libmp3lame', '-q:a', '2');
-            else ffmpegArgs.push('-c:a', 'aac');
-         } else {
-            ffmpegArgs.push('-c', 'copy');
-            if (downloadType === 'video') ffmpegArgs.push('-an');
-         }
-
-         ffmpegArgs.push('-y', finalFilename);
-         console.log(chalk.green(`\n📥 Starting HLS download via FFmpeg...`));
-         
-         await new Promise<void>((resolve, reject) => {
-            const ffmpeg = spawn(getFFmpegPath(), ffmpegArgs);
-            ffmpeg.stderr.on('data', d => {
-                const out = d.toString();
-                if (out.includes('time=')) process.stdout.write(chalk.gray(`\rProgress: ${out.split('time=')[1].split(' ')[0]}`));
-            });
-            ffmpeg.on('close', c => {
-                if (c === 0) {
-                    console.log(chalk.green.bold(`\n\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
-                    resolve();
-                } else reject(new Error(`FFmpeg exited with code ${c}`));
-            });
-            ffmpeg.on('error', reject);
+         await handleM3U8Download(url, finalFilename, {
+            headers,
+            audioUrl: (downloadType === 'complete' && audioTrack) ? audioTrack.url : undefined,
+            title: ytDataRef.title
          });
          return;
       }
