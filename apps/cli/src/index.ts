@@ -12,12 +12,33 @@ import { Buffer } from 'buffer';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import os from 'os';
+import crypto from 'crypto';
 import _ffmpegPath from 'ffmpeg-static';
 const ffmpegPath = _ffmpegPath as unknown as string | null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const USER_AGENT_IOS = 'com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)';
+const IOS_CLIENT_CONTEXT = {
+  clientName: 'IOS',
+  clientVersion: '21.02.3',
+  deviceMake: 'Apple',
+  deviceModel: 'iPhone16,2',
+  osName: 'iPhone',
+  osVersion: '18.3.2.22D82',
+  hl: 'en-US',
+  gl: 'US'
+};
+
+function getFFmpegPath(): string {
+  try {
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    return 'ffmpeg';
+  } catch (e) {
+    return (ffmpegPath as string) || 'ffmpeg';
+  }
+}
 
 let activeTempDir: string | null = null;
 
@@ -29,6 +50,13 @@ process.on('SIGINT', () => {
   }
   process.exit(0);
 });
+
+function generateSapiHash(sapisid: string, origin = 'https://www.youtube.com') {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const msg = `${timestamp} ${sapisid} ${origin}`;
+  const hash = crypto.createHash('sha1').update(msg).digest('hex');
+  return `SAPISIDHASH ${timestamp}_${hash}`;
+}
 
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return '0 Bytes';
@@ -227,6 +255,8 @@ interface YouTubeResolution {
   url: string;
   sizeFormatted: string;
   isAdaptive: boolean;
+  isHLS?: boolean;
+  hasAudio?: boolean;
 }
 
 interface YouTubeData {
@@ -237,7 +267,9 @@ interface YouTubeData {
   resolutions: YouTubeResolution[];
   apiKey: string;
   visitorData: string;
-  cookies: string;
+  cookies?: string;
+  sts?: number;
+  sapiHash?: string;
 }
 
 class YouTubeCookieJar {
@@ -257,56 +289,147 @@ class YouTubeCookieJar {
   getHeader(): string {
     return Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
   }
+
+  loadFromNetscape(content: string) {
+    content.split('\n').forEach(line => {
+      if (!line || line.startsWith('#')) return;
+      const parts = line.split('\t');
+      if (parts.length >= 7) {
+        const key = parts[5];
+        const value = parts[6];
+        if (key && value) {
+          this.cookies[key.trim()] = value.trim();
+        }
+      }
+    });
+  }
+}
+
+
+
+async function getYouTubeSession(videoId: string, jar: YouTubeCookieJar): Promise<{ apiKey: string, sts: number, visitorData: string, html: string }> {
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const localPagePath = path.join(process.cwd(), 'page.html');
+    const localCookiesPath = path.join(process.cwd(), 'cookies.txt');
+    const rootCookiesPath = path.join(process.cwd(), '..', '..', 'cookies.txt');
+    
+    // 0. Load cookies from cookies.txt if exists
+    if (fs.existsSync(localCookiesPath)) {
+        console.log(chalk.gray(`[*] Loading cookies from cookies.txt...`));
+        jar.loadFromNetscape(fs.readFileSync(localCookiesPath, 'utf8'));
+    } else if (fs.existsSync(rootCookiesPath)) {
+        console.log(chalk.gray(`[*] Loading cookies from project root cookies.txt...`));
+        jar.loadFromNetscape(fs.readFileSync(rootCookiesPath, 'utf8'));
+    }
+    
+    let html = "";
+    // 1. Try dynamic fetch first to see if we can get it without a file
+    try {
+        const response = await axios.get(watchUrl, { 
+            headers: { 
+                "User-Agent": USER_AGENT_IOS,
+                "Referer": "https://www.youtube.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            },
+            timeout: 15000
+        });
+        
+        if (response.headers['set-cookie']) {
+            jar.update(response.headers['set-cookie']);
+        }
+        
+        html = response.data;
+        
+        const hasApiKey = html.includes('INNERTUBE_API_KEY') || html.includes('innertube_api_key');
+        if (!hasApiKey) throw new Error("No API key in dynamic fetch");
+        console.log(chalk.gray(`[*] Dynamic session fetch successful.`));
+    } catch (e: any) {
+        if (e.response?.status === 429) {
+            console.log(chalk.yellow(`[!] YouTube is rate-limiting automated requests (429).`));
+        } else {
+            console.log(chalk.yellow(`[!] Dynamic session fetch failed: ${e.message}`));
+        }
+        
+        // 2. Ask user for path (Always ask if dynamic fails, as requested)
+        const { pagePath } = await inquirer.prompt([{
+            type: 'input',
+            name: 'pagePath',
+            message: 'Provide path to "page.html" (optional, press Enter to check current directory):',
+        }]);
+        
+        if (pagePath && fs.existsSync(pagePath)) {
+            console.log(chalk.gray(`[*] Reading from provided path: ${pagePath}`));
+            html = fs.readFileSync(pagePath, 'utf8');
+        } else if (!pagePath && fs.existsSync(localPagePath)) {
+            console.log(chalk.gray(`[*] Reading from page.html found in current directory...`));
+            html = fs.readFileSync(localPagePath, 'utf8');
+        } else {
+            console.log(chalk.gray(`[*] Continuing without session file...`));
+        }
+    }
+    
+    const apiKey = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)?.[1] || html.match(/innertube_api_key":"([^"]+)"/i)?.[1] || "";
+    const sts = html.match(/"sts":(\d+)/)?.[1] || html.match(/signatureTimestamp":(\d+)/)?.[1];
+    const visitorData = html.match(/"visitorData":"([^"]+)"/)?.[1] || html.match(/visitor_data":"([^"]+)"/i)?.[1] || "";
+    
+    return { apiKey, sts: sts ? parseInt(sts) : 19800, visitorData, html };
 }
 
 async function parseHlsManifest(url: string, headers: Record<string, string>): Promise<HLSFormat[]> {
-  const res = await axios.get(url, { headers });
-  const lines: string[] = res.data.split('\n');
-  const formats: HLSFormat[] = [];
-  const seen = new Set();
+  try {
+    const res = await axios.get(url, { headers });
+    const lines = res.data.split('\n');
+    const formats: HLSFormat[] = [];
+    const seen = new Set();
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!.trim();
-    if (line.startsWith('#EXT-X-STREAM-INF')) {
-      const info = line;
-      let streamUrl = lines[i + 1]?.trim();
-      if (!streamUrl || streamUrl.startsWith('#')) continue;
-      if (!streamUrl.startsWith('http')) streamUrl = new URL(streamUrl!, url).href;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith('#EXT-X-STREAM-INF')) {
+            const info = line;
+            let streamUrl = lines[i + 1]?.trim();
+            if (!streamUrl || streamUrl.startsWith('#')) continue;
+            if (!streamUrl.startsWith('http')) streamUrl = new URL(streamUrl, url).href;
 
-      const resMatch = info.match(/RESOLUTION=(\d+x\d+)/);
-      const codecs = info.match(/CODECS="([^"]+)"/)?.[1] || '';
-      const bw = info.match(/BANDWIDTH=(\d+)/)?.[1] || '0';
-      
-      let name = '', height = 0, type: 'video' | 'audio' = 'video';
-      let hasAudio = codecs.includes('mp4a') || codecs.includes('opus');
+            const resMatch = info.match(/RESOLUTION=(\d+x\d+)/);
+            const codecs = info.match(/CODECS="([^"]+)"/)?.[1] || '';
+            const bw = info.match(/BANDWIDTH=(\d+)/)?.[1] || '0';
+            
+            let name = '', height = 0, type: 'video' | 'audio' = 'video';
+            let hasAudio = codecs.includes('mp4a') || codecs.includes('opus');
 
-      if (resMatch) {
-        height = parseInt(resMatch[1]!.split('x')[1]!);
-        name = `[Video] ${height}p (${resMatch[1]})`;
-        type = 'video';
-      } else if (hasAudio) {
-        name = `[Audio Track] ${Math.round(parseInt(bw)/1000)}kbps`;
-        height = -1; type = 'audio';
-      } else { continue; }
-      
-      if (seen.has(name)) continue;
-      seen.add(name);
-      formats.push({ name, height, url: streamUrl, type, hasAudio });
-    } else if (line.toUpperCase().includes('TYPE=AUDIO') && line.includes('URI=')) {
-      const uriMatch = line.match(/URI="([^"]+)"/i);
-      if (!uriMatch) continue;
-      let streamUrl = uriMatch[1]!;
-      if (!streamUrl.startsWith('http')) streamUrl = new URL(streamUrl, url).href;
+            if (resMatch) {
+                height = parseInt(resMatch[1].split('x')[1]);
+                name = `[Video] ${height}p (${resMatch[1]})`;
+                type = 'video';
+            } else if (hasAudio) {
+                name = `[Audio Track] ${Math.round(parseInt(bw)/1000)}kbps`;
+                height = -1; type = 'audio';
+            } else { continue; }
+            
+            if (seen.has(name)) continue;
+            seen.add(name);
+            formats.push({ name, height, url: streamUrl, type, hasAudio });
+        } else if (line.toUpperCase().includes('TYPE=AUDIO') && line.includes('URI=')) {
+            const uriMatch = line.match(/URI="([^"]+)"/i);
+            if (!uriMatch) continue;
+            let streamUrl = uriMatch[1];
+            if (!streamUrl.startsWith('http')) streamUrl = new URL(streamUrl, url).href;
 
-      const nameMatch = line.match(/NAME="([^"]+)"/i);
-      const bw = line.match(/BANDWIDTH=(\d+)/i)?.[1] || '128000';
-      const name = `[Dedicated Audio] ${nameMatch ? nameMatch[1] : 'Track'} (${Math.round(parseInt(bw)/1000)}kbps)`;
-      if (seen.has(name)) continue;
-      seen.add(name);
-      formats.push({ name, height: -1, url: streamUrl, type: 'audio', hasAudio: true });
+            const nameMatch = line.match(/NAME="([^"]+)"/i);
+            const bw = line.match(/BANDWIDTH=(\d+)/i)?.[1] || '128000';
+            const name = `[Dedicated Audio] ${nameMatch ? nameMatch[1] : 'Track'} (${Math.round(parseInt(bw)/1000)}kbps)`;
+            if (seen.has(name)) continue;
+            seen.add(name);
+            formats.push({ name, height: -1, url: streamUrl, type: 'audio', hasAudio: true });
+        }
     }
+    return formats;
+  } catch (e) {
+    return [];
   }
-  return formats;
 }
 
 async function crawlYouTube(videoId: string): Promise<YouTubeData> {
@@ -316,23 +439,23 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
   const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
   const jar = new YouTubeCookieJar();
   
-  let html = "";
+
   let streamingData: any = null;
   let videoDetails: any = null;
   let lastError = "";
 
-  try {
-    const res = await fetch(watchUrl, { 
-      headers: { 
-        "User-Agent": tvUserAgent,
-        "Referer": "https://www.youtube.com/"
-      } 
-    });
-    const getSetCookie = (res.headers as any).getSetCookie;
-    jar.update(typeof getSetCookie === 'function' ? getSetCookie.call(res.headers) : []);
-    html = await res.text();
+  const { apiKey, sts, visitorData, html } = await getYouTubeSession(videoId, jar);
+  
+  const currentCookies = jar.getHeader();
+  let sapiHash = "";
+  const sapisidMatch = currentCookies.match(/SAPISID=([^;]+)/);
+  if (sapisidMatch && sapisidMatch[1]) {
+    sapiHash = generateSapiHash(sapisidMatch[1]);
+  }
 
-    const playerResMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\});/);
+  // Try parsing from HTML first (especially if provided via page.html)
+  try {
+    const playerResMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\});/) || html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\})\s*,/);
     if (playerResMatch && playerResMatch[1]) {
       const data = JSON.parse(playerResMatch[1]);
       if (data.streamingData) {
@@ -342,62 +465,31 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
     }
   } catch (e) {}
 
-  let apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i);
-  let apiKey = apiKeyMatch ? apiKeyMatch[1] : undefined;
+  // Always perform the authenticated POST request to get HLS manifests
+  // even if page.html provided some initial (usually DASH) data
+  try {
+    const headers: Record<string, string> = { 
+      "Content-Type": "application/json",
+      "User-Agent": USER_AGENT_IOS,
+      "Cookie": currentCookies,
+      "X-Goog-AuthUser": "0"
+    };
+    if (sapiHash) headers["Authorization"] = sapiHash;
 
-  if (!streamingData && !apiKey) {
-    const resEmbed = await fetch(embedUrl, { headers: { "User-Agent": browserUserAgent, "Referer": "https://www.youtube.com/" } });
-    const getSetCookie = (resEmbed.headers as any).getSetCookie;
-    jar.update(typeof getSetCookie === 'function' ? getSetCookie.call(resEmbed.headers) : []);
-    html = await resEmbed.text();
-    apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || html.match(/innertube_api_key":"([^"]+)"/i);
-    apiKey = apiKeyMatch ? apiKeyMatch[1] : undefined;
-  }
-                  
-  const visitorData = (html.match(/"visitorData":"([^"]+)"/) || html.match(/visitor_data":"([^"]+)"/i) || [])[1] || "";
-  
-  if (!streamingData && !apiKey) {
-    const isBlocked = html.includes('recaptcha') || html.includes('bot detection') || html.includes('consent.youtube.com');
-    throw new Error(`Could not find YouTube stream data or API key.${isBlocked ? ' (YouTube blocked the request)' : ''}`);
-  }
+    const response = await axios.post(`https://www.youtube.com/youtubei/v1/player?key=${apiKey || ''}`, {
+      videoId, 
+      context: { client: IOS_CLIENT_CONTEXT },
+      playbackContext: { contentPlaybackContext: { signatureTimestamp: sts } }
+    }, { headers });
 
-  if (!streamingData) {
-    const clients = [
-      { name: "WEB_EMBEDDED_PLAYER", version: "1.20240101.01.01", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
-      { name: "TVHTML5", version: "7.20230405.08.01", userAgent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)" },
-      { name: "ANDROID", version: "19.30.36", userAgent: "com.google.android.youtube/19.30.36 (Linux; U; Android 14; en_US) gzip" }
-    ];
-
-    for (const client of clients) {
-      try {
-        const payload = {
-          context: { client: { clientName: client.name, clientVersion: client.version, userAgent: client.userAgent, hl: 'en', gl: 'US', visitorData } },
-          videoId
-        };
-
-        const playerRes = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey || ''}`, {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "User-Agent": client.userAgent,
-            "Cookie": jar.getHeader(),
-            "X-Youtube-Client-Name": client.name === "WEB_EMBEDDED_PLAYER" ? "1" : (client.name === "TVHTML5" ? "7" : "3"),
-            "X-Youtube-Client-Version": client.version
-          },
-          body: JSON.stringify(payload)
-        });
-
-        const apiData = await playerRes.json() as any;
-        if (apiData.streamingData) {
-          streamingData = apiData.streamingData;
-          videoDetails = apiData.videoDetails;
-          break;
-        }
-        if (apiData.playabilityStatus) lastError = apiData.playabilityStatus.reason || apiData.playabilityStatus.status;
-      } catch (e) {
-        lastError = e instanceof Error ? e.message : String(e);
-      }
+    const apiData = response.data;
+    if (apiData.streamingData) {
+      streamingData = apiData.streamingData;
+      videoDetails = apiData.videoDetails;
     }
+    if (apiData.playabilityStatus) lastError = apiData.playabilityStatus.reason || apiData.playabilityStatus.status;
+  } catch (e: any) {
+    lastError = e.message;
   }
 
   if (streamingData) {
@@ -405,6 +497,39 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
     const description = videoDetails?.shortDescription || "";
     const thumbnail = videoDetails?.thumbnail?.thumbnails?.pop()?.url || "";
     const resolutions: YouTubeResolution[] = [];
+
+    // For YouTube, if we have HLS, we use it EXCLUSIVELY for stability (matches working script)
+    if (streamingData.hlsManifestUrl) {
+        const hlsFormats = await parseHlsManifest(streamingData.hlsManifestUrl, {
+            "User-Agent": USER_AGENT_IOS,
+            "Cookie": currentCookies,
+            "Authorization": sapiHash,
+            "X-Goog-AuthUser": "0"
+        });
+        
+        if (hlsFormats.length > 0) {
+            hlsFormats.forEach(h => {
+                if (h.type === 'video') {
+                    resolutions.push({
+                        itags: [0],
+                        qualityLabel: h.name,
+                        bitrate: 0,
+                        codec: 'HLS',
+                        mimeType: 'video/hls',
+                        url: h.url,
+                        sizeFormatted: 'HLS Stream',
+                        isAdaptive: true,
+                        isHLS: true,
+                        hasAudio: h.hasAudio
+                    });
+                }
+            });
+            // If we found HLS formats, we return them and SKIP dash formats
+            if (resolutions.length > 0) {
+               return { id: videoId, title, description, thumbnail, resolutions, apiKey, visitorData, cookies: currentCookies, sts, sapiHash };
+            }
+        }
+    }
 
     const allFormats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
     allFormats.forEach((f: any) => {
@@ -419,39 +544,69 @@ async function crawlYouTube(videoId: string): Promise<YouTubeData> {
             mimeType: f.mimeType,
             url: f.url,
             sizeFormatted: f.contentLength ? formatBytes(parseInt(f.contentLength, 10)) : 'Unknown',
-            isAdaptive: !f.mimeType.includes('audio/')
+            isAdaptive: !f.mimeType.includes('audio/'),
+            isHLS: f.isHLS || false,
+            hasAudio: f.hasAudio || f.mimeType.includes('audio') || !f.mimeType.includes('video')
           });
         }
       }
     });
 
     if (resolutions.length > 0) {
-      return { id: videoId, title, description, thumbnail, resolutions: resolutions.sort((a, b) => b.bitrate - a.bitrate), apiKey: apiKey || "", visitorData, cookies: jar.getHeader() };
+      return { 
+        id: videoId, 
+        title, 
+        description, 
+        thumbnail, 
+        resolutions: resolutions.sort((a, b) => b.bitrate - a.bitrate), 
+        apiKey: apiKey || "", 
+        visitorData, 
+        cookies: currentCookies, 
+        sts,
+        sapiHash
+      };
     }
   }
 
   throw new Error(`YouTube failed all attempts. Last error: ${lastError || 'No streaming data found'}`);
 }
 
-async function getBestYouTubeAudio(videoId: string, apiKey: string, visitorData: string): Promise<string> {
-  const payload = {
-    context: { client: { clientName: "IOS", clientVersion: "19.29.1", userAgent: "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)", visitorData } },
-    videoId
+async function getBestYouTubeAudio(videoId: string, apiKey: string, visitorData: string, cookies?: string, sts?: number, sapiHash?: string): Promise<string> {
+  // If we have a player response, try to find HLS audio first (more stable)
+  // But this function is usually called when we already have the URL.
+  // Let's update it to use axios and the same logic as the working script.
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "User-Agent": USER_AGENT_IOS,
+    "Cookie": cookies || "",
+    "X-Goog-AuthUser": "0"
   };
+  if (sapiHash) headers["Authorization"] = sapiHash;
 
-  const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey || ''}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+  try {
+    const response = await axios.post(`https://www.youtube.com/youtubei/v1/player?key=${apiKey || ''}`, {
+      videoId, 
+      context: { client: IOS_CLIENT_CONTEXT },
+      playbackContext: { contentPlaybackContext: { signatureTimestamp: sts } }
+    }, { headers });
 
-  const data = await res.json() as any;
-  const audioFormat = data.streamingData?.adaptiveFormats
-    ?.filter((f: any) => f.mimeType.includes('audio/'))
-    ?.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    const data = response.data;
+    
+    // Prioritize HLS audio track if manifest exists
+    if (data.streamingData?.hlsManifestUrl) {
+      const hlsFormats = await parseHlsManifest(data.streamingData.hlsManifestUrl, headers);
+      const audioTrack = hlsFormats.find(f => f.type === 'audio') || hlsFormats.find(f => f.hasAudio);
+      if (audioTrack) return audioTrack.url;
+    }
 
-  if (!audioFormat?.url) throw new Error("Could not find audio stream for YouTube video.");
-  return audioFormat.url;
+    const audioFormat = data.streamingData?.adaptiveFormats
+      ?.filter((f: any) => f.mimeType.includes('audio/'))
+      ?.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+
+    if (audioFormat?.url) return audioFormat.url;
+  } catch (e) {}
+  
+  throw new Error("Could not find audio stream for YouTube video.");
 }
 
 async function handleM3U8Download(url: string): Promise<void> {
@@ -1021,6 +1176,11 @@ async function downloadWithProgress(url: string, outputPath: string, headers: Re
       ...headers
     },
     responseType: 'stream'
+  }).catch(e => {
+    if (e.response?.status === 403) {
+      console.error(chalk.red(`\n[!] 403 Forbidden details: ${e.response.data ? (typeof e.response.data === 'string' ? e.response.data : JSON.stringify(e.response.data)) : 'No body'}`));
+    }
+    throw e;
   });
 
   const totalLength = response.headers['content-length'];
@@ -1073,7 +1233,7 @@ async function downloadWithProgress(url: string, outputPath: string, headers: Re
 
 async function muxFiles(videoPath: string, audioPath: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+    const ffmpeg = spawn(getFFmpegPath(), [
       '-y',
       '-i', videoPath,
       '-i', audioPath,
@@ -1097,7 +1257,7 @@ async function extractAudio(videoPath: string, outputPath: string, format: strin
   const extraArgs = format === 'mp3' ? ['-q:a', '2'] : [];
 
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+    const ffmpeg = spawn(getFFmpegPath(), [
       '-y',
       '-i', videoPath,
       '-vn',
@@ -1117,7 +1277,7 @@ async function extractAudio(videoPath: string, outputPath: string, format: strin
 
 async function extractVideo(videoPath: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn(ffmpegPath || 'ffmpeg', [
+    const ffmpeg = spawn(getFFmpegPath(), [
       '-y',
       '-i', videoPath,
       '-an',
@@ -1188,6 +1348,8 @@ async function main() {
     let audioUrlToMux = '';
     let downloadType = 'complete';
     let outputFormat = 'mp4';
+    let isHLS = false;
+    let ytDataRef: YouTubeData | null = null;
 
     const urlObj = new URL(url);
 
@@ -1287,7 +1449,7 @@ async function main() {
 
         if (downloadType === 'audio') {
           console.log(chalk.blue('Fetching best audio stream...'));
-          url = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData);
+          url = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData, ytData.cookies, ytData.sts, ytData.sapiHash);
           const cleanTitle = sanitizeFilename(ytData.title);
           filename = `${cleanTitle}.${outputFormat}`;
         } else {
@@ -1305,11 +1467,17 @@ async function main() {
           ]);
 
           url = choice.resolution.url;
+          isHLS = choice.resolution.isHLS || false;
+          ytDataRef = ytData;
           const selectedRes = choice.resolution as YouTubeResolution;
 
-          if (selectedRes.isAdaptive && downloadType === 'complete') {
+          if (selectedRes.isHLS && downloadType === 'complete') {
+            console.log(chalk.blue('HLS quality selected. Fetching manifest audio track...'));
+            // getBestYouTubeAudio will now automatically prioritize HLS audio if manifest is available
+            audioUrlToMux = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData, ytData.cookies, ytData.sts, ytData.sapiHash);
+          } else if (selectedRes.isAdaptive && downloadType === 'complete') {
             console.log(chalk.blue('Adaptive quality selected. Fetching audio stream...'));
-            audioUrlToMux = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData);
+            audioUrlToMux = await getBestYouTubeAudio(ytData.id, ytData.apiKey, ytData.visitorData, ytData.cookies, ytData.sts, ytData.sapiHash);
           }
 
           const cleanTitle = sanitizeFilename(ytData.title);
@@ -1377,6 +1545,82 @@ async function main() {
     if (url && filename) {
       const finalFilename = getUniqueFilename(filename);
       const headers: Record<string, string> = {};
+
+      if (isYouTube && ytDataRef) {
+        headers['User-Agent'] = USER_AGENT_IOS;
+        if (ytDataRef.cookies) headers['Cookie'] = ytDataRef.cookies;
+        if (ytDataRef.sapiHash) headers['Authorization'] = ytDataRef.sapiHash;
+        headers['X-Goog-AuthUser'] = '0';
+        headers['Origin'] = 'https://www.youtube.com';
+        headers['Referer'] = `https://www.youtube.com/watch?v=${ytDataRef.id}`;
+        headers['Accept'] = '*/*';
+        headers['Accept-Language'] = 'en-US,en;q=0.9';
+        headers['Connection'] = 'keep-alive';
+        headers['Sec-Fetch-Dest'] = 'video';
+        headers['Sec-Fetch-Mode'] = 'no-cors';
+        headers['Sec-Fetch-Site'] = 'cross-site';
+      }
+
+      if (isYouTube && isHLS && ytDataRef) {
+         // Specialized HLS download for YouTube
+         const bestAudio = ytDataRef.resolutions.find(r => !r.isHLS && r.mimeType.includes('audio'))?.url;
+         
+         const headerLines = [
+            `User-Agent: ${USER_AGENT_IOS}`,
+            ytDataRef.cookies ? `Cookie: ${ytDataRef.cookies}` : null,
+            ytDataRef.sapiHash ? `Authorization: ${ytDataRef.sapiHash}` : null,
+            'X-Goog-AuthUser: 0',
+            'Origin: https://www.youtube.com',
+            `Referer: https://www.youtube.com/watch?v=${ytDataRef.id}`
+         ].filter(Boolean) as string[];
+         const headerStr = headerLines.join('\r\n') + '\r\n';
+
+         let ffmpegArgs = [
+            '-analyzeduration', '0',
+            '-probesize', '32',
+            '-http_persistent', '1',
+            '-threads', '0',
+            '-reconnect', '1',
+            '-reconnect_at_eof', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '2',
+            '-thread_queue_size', '4096',
+            '-headers', headerStr,
+            '-i', url
+         ];
+
+         if (bestAudio && downloadType === 'complete') {
+            console.log(chalk.cyan(`[*] Merging separate audio track...`));
+            ffmpegArgs.push('-thread_queue_size', '4096', '-headers', headerStr, '-i', bestAudio);
+            ffmpegArgs.push('-c:v', 'copy', '-c:a', outputFormat === 'mp3' ? 'libmp3lame' : 'aac', '-map', '0:v:0', '-map', '1:a:0');
+         } else if (downloadType === 'audio') {
+            ffmpegArgs.push('-vn');
+            if (outputFormat === 'mp3') ffmpegArgs.push('-c:a', 'libmp3lame', '-q:a', '2');
+            else ffmpegArgs.push('-c:a', 'aac');
+         } else {
+            ffmpegArgs.push('-c', 'copy');
+            if (downloadType === 'video') ffmpegArgs.push('-an');
+         }
+
+         ffmpegArgs.push('-y', finalFilename);
+         console.log(chalk.green(`\n📥 Starting HLS download via FFmpeg...`));
+         
+         await new Promise<void>((resolve, reject) => {
+            const ffmpeg = spawn(getFFmpegPath(), ffmpegArgs);
+            ffmpeg.stderr.on('data', d => {
+                const out = d.toString();
+                if (out.includes('time=')) process.stdout.write(chalk.gray(`\rProgress: ${out.split('time=')[1].split(' ')[0]}`));
+            });
+            ffmpeg.on('close', c => {
+                if (c === 0) {
+                    console.log(chalk.green.bold(`\n\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
+                    resolve();
+                } else reject(new Error(`FFmpeg exited with code ${c}`));
+            });
+            ffmpeg.on('error', reject);
+         });
+         return;
+      }
       
       if (tiktokTokens) {
         if (tiktokTokens.cookieString) {
@@ -1399,14 +1643,64 @@ async function main() {
         const audioTempPath = path.join(tempDir, 'audio.m4a');
         
         try {
-          console.log(chalk.blue('\n📥 Downloading video stream...'));
-          await downloadWithProgress(url, videoTempPath, headers);
-          
-          console.log(chalk.blue('\n📥 Downloading audio stream...'));
-          await downloadWithProgress(audioUrlToMux, audioTempPath);
-          
-          console.log(chalk.yellow('\n🎬 Muxing video and audio...'));
-          await muxFiles(videoTempPath, audioTempPath, finalFilename);
+          if (isYouTube) {
+            // Use FFmpeg for YouTube to handle auth and merging more reliably
+            const headerStr = [
+              `User-Agent: ${USER_AGENT_IOS}`,
+              headers['Cookie'] ? `Cookie: ${headers['Cookie']}` : null,
+              headers['Authorization'] ? `Authorization: ${headers['Authorization']}` : null,
+              'X-Goog-AuthUser: 0',
+              'Origin: https://www.youtube.com',
+              headers['Referer'] ? `Referer: ${headers['Referer']}` : null
+            ].filter(Boolean).join('\r\n') + '\r\n';
+
+            console.log(chalk.blue('\n📥 Downloading and merging streams via FFmpeg...'));
+            
+            let ffmpegArgs = [
+              '-analyzeduration', '0',
+              '-probesize', '32',
+              '-http_persistent', '1',
+              '-threads', '0',
+              '-reconnect', '1',
+              '-reconnect_at_eof', '1',
+              '-reconnect_streamed', '1',
+              '-reconnect_delay_max', '2',
+              '-thread_queue_size', '4096',
+              '-headers', headerStr,
+              '-i', url,
+              '-thread_queue_size', '4096',
+              '-headers', headerStr,
+              '-i', audioUrlToMux,
+              '-c:v', 'copy',
+              '-c:a', outputFormat === 'mp3' ? 'libmp3lame' : 'aac',
+              '-map', '0:v:0',
+              '-map', '1:a:0'
+            ];
+
+            ffmpegArgs.push('-y', finalFilename);
+
+            await new Promise<void>((resolve, reject) => {
+              const ffmpeg = spawn(getFFmpegPath(), ffmpegArgs);
+              ffmpeg.stderr.on('data', d => {
+                const out = d.toString();
+                if (out.includes('time=')) process.stdout.write(chalk.gray(`\rProgress: ${out.split('time=')[1].split(' ')[0]}`));
+              });
+              ffmpeg.on('close', c => {
+                if (c === 0) resolve();
+                else reject(new Error(`FFmpeg exited with code ${c}`));
+              });
+              ffmpeg.on('error', reject);
+            });
+          } else {
+            console.log(chalk.blue('\n📥 Downloading video stream...'));
+            await downloadWithProgress(url, videoTempPath, headers);
+            
+            console.log(chalk.blue('\n📥 Downloading audio stream...'));
+            await downloadWithProgress(audioUrlToMux, audioTempPath, headers);
+            
+            console.log(chalk.yellow('\n🎬 Muxing video and audio...'));
+            await muxFiles(videoTempPath, audioTempPath, finalFilename);
+          }
           
           console.log(chalk.green.bold(`\n🎉 SUCCESS! File saved to: ${path.basename(finalFilename)}`));
         } finally {
@@ -1436,7 +1730,48 @@ async function main() {
           
           try {
             console.log(chalk.blue('\n📥 Downloading stream...'));
-            await downloadWithProgress(url, tempPath, headers);
+            if (isYouTube) {
+               const headerStr = [
+                 `User-Agent: ${USER_AGENT_IOS}`,
+                 headers['Cookie'] ? `Cookie: ${headers['Cookie']}` : null,
+                 headers['Authorization'] ? `Authorization: ${headers['Authorization']}` : null,
+                 'X-Goog-AuthUser: 0',
+                 'Origin: https://www.youtube.com',
+                 headers['Referer'] ? `Referer: ${headers['Referer']}` : null
+               ].filter(Boolean).join('\r\n') + '\r\n';
+               
+               let ffmpegArgs = [
+                 '-analyzeduration', '0',
+                 '-probesize', '32',
+                 '-http_persistent', '1',
+                 '-threads', '0',
+                 '-reconnect', '1',
+                 '-reconnect_at_eof', '1',
+                 '-reconnect_streamed', '1',
+                 '-reconnect_delay_max', '2',
+                 '-y',
+                 '-thread_queue_size', '4096',
+                 '-headers', headerStr,
+                 '-i', url,
+                 '-c', 'copy',
+                 tempPath
+               ];
+               
+               await new Promise<void>((resolve, reject) => {
+                 const ffmpeg = spawn(getFFmpegPath(), ffmpegArgs);
+                 ffmpeg.stderr.on('data', d => {
+                    const out = d.toString();
+                    if (out.includes('time=')) process.stdout.write(chalk.gray(`\rProgress: ${out.split('time=')[1].split(' ')[0]}`));
+                 });
+                 ffmpeg.on('close', c => {
+                    if (c === 0) resolve();
+                    else reject(new Error(`FFmpeg exited with code ${c}`));
+                 });
+                 ffmpeg.on('error', reject);
+               });
+            } else {
+              await downloadWithProgress(url, tempPath, headers);
+            }
           } catch (e: any) {
             if (fs.existsSync(tempDir)) await fs.remove(tempDir);
             activeTempDir = null;
