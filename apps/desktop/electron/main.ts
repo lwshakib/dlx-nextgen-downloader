@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -85,7 +86,8 @@ const getSettingsPaths = () => {
   const homeDir = process.env.USERPROFILE || os.homedir();
   const settingsDir = path.join(homeDir, ".flux");
   const settingsFile = path.join(settingsDir, "settings.json");
-  return { settingsDir, settingsFile };
+  const historyFile = path.join(settingsDir, "history.json");
+  return { settingsDir, settingsFile, historyFile };
 };
 
 const ensureSettingsFile = async () => {
@@ -210,6 +212,7 @@ const activeFetchDownloads = new Map<
 
 // Track downloader windows - store the most recent one
 let downloaderWindow: BrowserWindow | null = null;
+let addUrlWindow: BrowserWindow | null = null;
 
 // Helper function to show download completion notification and focus window
 function notifyDownloadComplete(
@@ -258,8 +261,8 @@ const EXTENSION_SERVER_PORT = 8765;
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1200,
-    height: 670,
+    width: 950,
+    height: 500,
     show: false,
     autoHideMenuBar: true,
     center: true,
@@ -342,6 +345,28 @@ ipcMain.handle("save-settings", async (_event, payload) => {
   }
 });
 
+ipcMain.handle("load-history", async () => {
+  try {
+    const { historyFile } = getSettingsPaths();
+    const contents = await fs.readFile(historyFile, "utf-8");
+    return JSON.parse(contents);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("save-history", async (_event, history) => {
+  try {
+    const { settingsDir, historyFile } = getSettingsPaths();
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.writeFile(historyFile, JSON.stringify(history, null, 2), "utf-8");
+    return true;
+  } catch (error) {
+    console.error("Failed to save history", error);
+    return false;
+  }
+});
+
 // Handle theme changes and broadcast to all windows
 ipcMain.on("theme-change", (_event, theme: string) => {
   // Broadcast theme change to all windows
@@ -382,16 +407,16 @@ ipcMain.handle("window-close", (_event) => {
 });
 
 // Crawling handlers
-ipcMain.handle("crawl-tiktok", async (_event, url: string) => {
-  return await crawlTikTok(url);
+ipcMain.handle("crawl-tiktok", async (_event, { url, headers, body }) => {
+  return await crawlTikTok(url, headers, body);
 });
 
-ipcMain.handle("crawl-youtube", async (_event, videoId: string) => {
-  return await crawlYouTube(videoId);
+ipcMain.handle("crawl-youtube", async (_event, { videoId, headers, body, pageHtml }) => {
+  return await crawlYouTube(videoId, headers, pageHtml);
 });
 
-ipcMain.handle("crawl-facebook", async (_event, url: string) => {
-  return await crawlFacebook(url);
+ipcMain.handle("crawl-facebook", async (_event, { url, headers, body }) => {
+  return await crawlFacebook(url, headers, body);
 });
 
 ipcMain.handle(
@@ -421,6 +446,7 @@ function createDownloaderWindow(payload: {
     msToken?: string | null;
     ttChainToken?: string | null;
   } | null;
+  downloadPath?: string | null;
 }) {
   // Check if a downloader window already exists and is not destroyed
   if (downloaderWindow && !downloaderWindow.isDestroyed()) {
@@ -432,6 +458,7 @@ function createDownloaderWindow(payload: {
       filename: payload.filename || null,
       audioUrl: payload.audioUrl || null,
       cookies: payload.cookies || null,
+      downloadPath: payload.downloadPath || null,
     });
     downloaderWindow.show();
     downloaderWindow.focus();
@@ -492,6 +519,7 @@ function createDownloaderWindow(payload: {
     filename: payload.filename || null,
     audioUrl: payload.audioUrl || null,
     cookies: payload.cookies || null,
+    downloadPath: payload.downloadPath || null,
   };
 
   // Store as pending data
@@ -558,6 +586,104 @@ function createDownloaderWindow(payload: {
   }, 3000);
 }
 
+function createAddUrlWindow() {
+  if (addUrlWindow && !addUrlWindow.isDestroyed()) {
+    addUrlWindow.focus();
+    return;
+  }
+
+  addUrlWindow = new BrowserWindow({
+    width: 500,
+    height: 480,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    frame: false, // User requested standard buttons but I'll use the same theme
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: 'rgba(0,0,0,0)',
+      symbolColor: '#71717a',
+      height: 32
+    },
+    parent: win || undefined,
+    modal: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.mjs"),
+      sandbox: true,
+      contextIsolation: true,
+    },
+  });
+
+  const addUrlUrl = VITE_DEV_SERVER_URL
+    ? `${VITE_DEV_SERVER_URL}/add-url.html`
+    : path.join(RENDERER_DIST, "add-url.html");
+
+  if (VITE_DEV_SERVER_URL) {
+    addUrlWindow.loadURL(addUrlUrl);
+  } else {
+    addUrlWindow.loadFile(path.join(RENDERER_DIST, "add-url.html"));
+  }
+
+  addUrlWindow.once('ready-to-show', () => {
+    addUrlWindow?.show();
+  });
+}
+
+ipcMain.handle("open-add-url-window", () => {
+  createAddUrlWindow();
+});
+
+ipcMain.handle("close-add-url-window", () => {
+  if (addUrlWindow && !addUrlWindow.isDestroyed()) {
+    addUrlWindow.close();
+  }
+});
+
+ipcMain.on("add-url-confirmed", (_event, { url, downloadPath, headers, body, pageHtml }) => {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("start-crawl-request", { url, downloadPath, headers, body, pageHtml });
+  }
+});
+
+ipcMain.on("add-url-save-later", (_event, data) => {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("save-for-later-request", data);
+  }
+});
+
+ipcMain.handle("get-clipboard-text", () => {
+  return clipboard.readText();
+});
+
+ipcMain.handle("select-folder", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ["openDirectory"],
+    title: "Select Download Location",
+  });
+
+  if (canceled || filePaths.length === 0) {
+    return null;
+  }
+
+  return filePaths[0];
+});
+
+ipcMain.handle("select-file", async (_event, { title, extensions }) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "Files", extensions: extensions || ["*"] }],
+    title: title || "Select File",
+  });
+
+  if (canceled || filePaths.length === 0) {
+    return null;
+  }
+
+  return filePaths[0];
+});
+
 // Handle download requests - creates a new window for each download
 ipcMain.handle(
   "start-download",
@@ -571,6 +697,7 @@ ipcMain.handle(
         msToken?: string | null;
         ttChainToken?: string | null;
       } | null;
+      downloadPath?: string | null;
     }
   ) => {
     createDownloaderWindow(payload);

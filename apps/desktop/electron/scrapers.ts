@@ -1,4 +1,5 @@
 import axios from "axios";
+import fs from "node:fs";
 
 function formatBytes(bytes: number, decimals = 2) {
   if (bytes === 0) return "0 Bytes";
@@ -7,6 +8,21 @@ function formatBytes(bytes: number, decimals = 2) {
   const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+}
+
+function resolveData(input: any): string | null {
+  if (!input) return null;
+  if (typeof input === "string") return input;
+  if (input._filePath) {
+    try {
+      return fs.readFileSync(input._filePath, "utf-8");
+    } catch (e) {
+      console.error(`Failed to read file from path: ${input._filePath}`, e);
+      return null;
+    }
+  }
+  if (typeof input === "object") return JSON.stringify(input);
+  return null;
 }
 
 const SCRIPT_ID = "__UNIVERSAL_DATA_FOR_REHYDRATION__";
@@ -23,9 +39,24 @@ function getQualityLabel(height?: number | null, qualityType?: string | null) {
   return null;
 }
 
-export async function crawlTikTok(url: string) {
+export async function crawlTikTok(
+  url: string,
+  customHeaders?: any,
+  body?: any
+) {
+  const resolvedHeaders = customHeaders?._filePath 
+    ? JSON.parse(resolveData(customHeaders) || "{}") 
+    : (typeof customHeaders === "object" ? customHeaders : JSON.parse(customHeaders || "{}"));
+  const resolvedBody = resolveData(body);
+
   // First fetch to get cookies and tokens
-  const res1 = await fetch(url);
+  const res1 = await fetch(url, {
+    method: resolvedBody ? "POST" : "GET",
+    headers: {
+      ...(resolvedHeaders || {}),
+    },
+    body: resolvedBody || undefined,
+  });
 
   if (!res1.ok) {
     throw new Error(
@@ -186,7 +217,11 @@ class YouTubeCookieJar {
   }
 }
 
-export async function crawlYouTube(videoId: string) {
+export async function crawlYouTube(
+  videoId: string,
+  customHeaders?: any,
+  htmlSource?: any
+) {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   const embedUrl = `https://www.youtube.com/embed/${videoId}`;
   const tvUserAgent =
@@ -200,30 +235,48 @@ export async function crawlYouTube(videoId: string) {
   let videoDetails: any = null;
   let lastError = "";
 
-  try {
-    const res = await fetch(watchUrl, {
-      headers: {
-        "User-Agent": tvUserAgent,
-        Referer: "https://www.youtube.com/",
-      },
-    });
-    const setCookies = (res.headers as any).getSetCookie
-      ? (res.headers as any).getSetCookie()
-      : [];
-    jar.update(setCookies);
-    html = await res.text();
+  // Resolve HTML source (either string or from file)
+  html = resolveData(htmlSource) || "";
+  if (html) {
+    console.log(`[*] Successfully loaded HTML source (Size: ${html.length} chars)`);
+  }
 
-    const playerResMatch = html.match(
-      /ytInitialPlayerResponse\s*=\s*(\{.*?\});/
-    );
-    if (playerResMatch && playerResMatch[1]) {
-      const data = JSON.parse(playerResMatch[1]);
-      if (data.streamingData) {
-        streamingData = data.streamingData;
-        videoDetails = data.videoDetails;
+  // Resolve headers
+  const resolvedHeaders = customHeaders?._filePath 
+    ? JSON.parse(resolveData(customHeaders) || "{}") 
+    : (typeof customHeaders === "object" ? customHeaders : JSON.parse(customHeaders || "{}"));
+
+  try {
+    if (!html) {
+      const res = await fetch(watchUrl, {
+        headers: {
+          "User-Agent": tvUserAgent,
+          Referer: "https://www.youtube.com/",
+          ...(resolvedHeaders || {}),
+        },
+      });
+      const setCookies = (res.headers as any).getSetCookie
+        ? (res.headers as any).getSetCookie()
+        : [];
+      jar.update(setCookies);
+      html = await res.text();
+    }
+
+    if (html) {
+      const playerResMatch = html.match(
+        /ytInitialPlayerResponse\s*=\s*(\{.*?\});/
+      );
+      if (playerResMatch && playerResMatch[1]) {
+        const data = JSON.parse(playerResMatch[1]);
+        if (data.streamingData) {
+          streamingData = data.streamingData;
+          videoDetails = data.videoDetails;
+        }
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error(`[!] Error during YouTube crawl phase 1:`, e);
+  }
 
   let apiKey = (html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) ||
     html.match(/innertube_api_key":"([^"]+)"/i) ||
@@ -414,7 +467,16 @@ function decodeFbUnicode(str: string | null | undefined) {
   );
 }
 
-export async function crawlFacebook(url: string) {
+export async function crawlFacebook(
+  url: string,
+  customHeaders?: any,
+  body?: any
+) {
+  const resolvedHeaders = customHeaders?._filePath 
+    ? JSON.parse(resolveData(customHeaders) || "{}") 
+    : (typeof customHeaders === "object" ? customHeaders : JSON.parse(customHeaders || "{}"));
+  const resolvedBody = resolveData(body);
+
   let targetUrl = url;
   if (url.includes("fb.watch")) {
     try {
@@ -430,10 +492,13 @@ export async function crawlFacebook(url: string) {
     targetUrl.match(/v=(\d+)/);
 
   const response = await fetch(targetUrl, {
+    method: resolvedBody ? "POST" : "GET",
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      ...(resolvedHeaders || {}),
     },
+    body: resolvedBody || undefined,
   });
 
   if (!response.ok) {

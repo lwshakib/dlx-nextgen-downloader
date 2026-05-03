@@ -28,6 +28,15 @@ export default defineConfig({
         : {},
     }),
   ],
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        downloader: path.resolve(__dirname, 'downloader.html'),
+        addUrl: path.resolve(__dirname, 'add-url.html'),
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
